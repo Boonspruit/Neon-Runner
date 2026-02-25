@@ -39,6 +39,8 @@ const CONFIG = {
   baseSpeed: 22,
   speedRamp: 0.85,
   botCount: 7,
+  maxBots: 20,
+  botJoinIntervalMs: 5500,
   trailSpacing: 0.34,
   maxTrailLength: 760,
   wallHalfWidth: 0.19,
@@ -47,12 +49,54 @@ const CONFIG = {
   powerupSpawnMs: 5200,
 };
 
-const BOT_COLORS = ['#ff2cc6', '#ffa24d', '#79ff7a', '#7a8dff', '#25f0ff', '#ff5a9f', '#ffd84e', '#c98dff'];
+const BOT_COLORS = ['#ff2cc6', '#ffa24d', '#79ff7a', '#7a8dff', '#25f0ff', '#ff5a9f', '#ffd84e', '#c98dff', '#6bffb0', '#ff8f4d', '#67d1ff', '#ff4dc4', '#b9ff4d', '#8ec5ff', '#ff6e9c', '#9ef07a', '#ffb86c', '#5af7d2', '#a08dff', '#ff7fb2', '#7df06b', '#6ec5ff', '#ff9d57', '#7affd9'];
 
 function botPaletteExcluding(playerColor) {
   const normalized = (playerColor || '').toLowerCase();
-  const filtered = BOT_COLORS.filter((c) => c.toLowerCase() !== normalized);
+  const seen = new Set();
+  const filtered = [];
+  for (const color of BOT_COLORS) {
+    const key = color.toLowerCase();
+    if (key === normalized || seen.has(key)) continue;
+    seen.add(key);
+    filtered.push(color);
+  }
   return filtered.length ? filtered : BOT_COLORS;
+}
+
+const BOT_SPAWNS = [
+  [-94, -94, 1],
+  [94, 94, 3],
+  [-94, 94, 2],
+  [94, -94, 0],
+  [0, -108, 1],
+  [108, 0, 2],
+  [-108, 0, 0],
+  [58, -82, 1],
+  [-58, 82, 3],
+  [74, 74, 2],
+];
+
+function pickUniqueBotColor(playerColor, usedColors) {
+  const palette = botPaletteExcluding(playerColor);
+  for (const color of palette) {
+    const key = color.toLowerCase();
+    if (!usedColors.has(key)) {
+      usedColors.add(key);
+      return color;
+    }
+  }
+  return palette[Math.floor(Math.random() * palette.length)];
+}
+
+function recolorEntity(entity, color) {
+  entity.color = color;
+  const body = entity?.mesh?.children?.[0];
+  if (body?.material) {
+    body.material.color.setHex(hexToInt(color));
+    body.material.emissive.setHex(hexToInt(color));
+  }
+  syncEntityTrailColor(entity);
 }
 
 const state = {
@@ -77,6 +121,8 @@ const state = {
   particles: [],
   powerups: [],
   nextEntityId: 1,
+  nextBotJoinMs: 0,
+  botSpawnCursor: 0,
   pixelTimer: 0,
 };
 
@@ -290,6 +336,10 @@ function createEntity(isPlayer, color, x, z, dirIndex) {
     thinkTimer: randomIn(0.05, 0.16),
     targetId: null,
     pathMemory: [],
+    spawnX: x,
+    spawnZ: z,
+    spawnDirIndex: dirIndex,
+    deadTimer: 0,
   };
   entity.trailSamples.push({ ownerId: entity.id, owner: isPlayer ? 'player' : 'bot', x, z, bornAt: state.survived });
   syncEntityTrailColor(entity);
@@ -404,30 +454,37 @@ function cleanupRunObjects() {
   state.entities = []; state.trails = []; state.particles = []; state.powerups = [];
 }
 
+function spawnAdditionalBot() {
+  const botCount = state.entities.filter((e) => !e.isPlayer).length;
+  if (botCount >= CONFIG.maxBots) return;
+
+  const [x, z, d] = BOT_SPAWNS[state.botSpawnCursor % BOT_SPAWNS.length];
+  state.botSpawnCursor += 1;
+
+  const usedBotColors = new Set(
+    state.entities.filter((e) => !e.isPlayer).map((e) => e.color.toLowerCase())
+  );
+  const botColor = pickUniqueBotColor(state.selectedTrail.color, usedBotColors);
+  state.entities.push(createEntity(false, botColor, x, z, d));
+}
+
 function resetGame() {
+
   cleanupRunObjects();
   Object.assign(state, {
     running: false, survived: 0, score: 0, speedMul: 1, closeCallMultiplier: 1, nearMissCooldown: 0,
     phaseGhostTimer: 0, phaseGhostHits: 0, overloadTimer: 0, overloadCooldown: 0,
-    nextPowerupMs: CONFIG.powerupSpawnMs, nextEntityId: 1, pixelTimer: 0,
+    nextPowerupMs: CONFIG.powerupSpawnMs, nextEntityId: 1, nextBotJoinMs: CONFIG.botJoinIntervalMs, botSpawnCursor: 0, pixelTimer: 0,
   });
 
   state.entities.push(createEntity(true, state.selectedTrail.color, 0, 0, 0));
 
-  const botSpawns = [
-    [-94, -94, 1],
-    [94, 94, 3],
-    [-94, 94, 2],
-    [94, -94, 0],
-    [0, -108, 1],
-    [108, 0, 2],
-    [-108, 0, 0],
-  ];
-
-  const palette = botPaletteExcluding(state.selectedTrail.color);
+  const usedBotColors = new Set();
   for (let i = 0; i < CONFIG.botCount; i += 1) {
-    const [x, z, d] = botSpawns[i % botSpawns.length];
-    state.entities.push(createEntity(false, palette[i % palette.length], x, z, d));
+    const [x, z, d] = BOT_SPAWNS[i % BOT_SPAWNS.length];
+    const botColor = pickUniqueBotColor(state.selectedTrail.color, usedBotColors);
+    state.entities.push(createEntity(false, botColor, x, z, d));
+    state.botSpawnCursor += 1;
   }
 
   updateUi();
@@ -735,12 +792,34 @@ function activateOverload() {
   // Power-ups are disabled.
 }
 
+function respawnBot(bot) {
+  bot.alive = true;
+  bot.mesh.visible = true;
+  bot.x = bot.spawnX;
+  bot.z = bot.spawnZ;
+  bot.dirIndex = bot.spawnDirIndex;
+  bot.trailSamples = [{ ownerId: bot.id, owner: 'bot', x: bot.x, z: bot.z, bornAt: state.survived }];
+  bot.trailPendingDist = 0;
+  bot.trailDirty = true;
+  bot.deadTimer = 0;
+  bot.pathMemory = [];
+  bot.mesh.position.set(bot.x, 0.1, bot.z);
+  bot.mesh.rotation.y = bot.dirIndex * (Math.PI / 2);
+}
+
 function updateEntities(dt) {
+
   const worldSpeed = (CONFIG.baseSpeed + state.survived * CONFIG.speedRamp) * state.speedMul;
 
   for (let i = 0; i < state.entities.length; i += 1) {
     const e = state.entities[i];
-    if (!e.alive) continue;
+    if (!e.alive) {
+      if (!e.isPlayer) {
+        e.deadTimer -= dt;
+        if (e.deadTimer <= 0) respawnBot(e);
+      }
+      continue;
+    }
     if (!e.isPlayer) aiTurn(e, dt);
 
     const speed = e.isPlayer ? worldSpeed : worldSpeed * randomIn(0.9, 1.03);
@@ -758,7 +837,11 @@ function updateEntities(dt) {
     if (checkCollision(e)) {
       e.alive = false;
       e.mesh.visible = false;
-      if (e.isPlayer) playCrashSound();
+      if (e.isPlayer) {
+        playCrashSound();
+      } else {
+        e.deadTimer = randomIn(1.35, 2.4);
+      }
       continue;
     }
 
@@ -845,6 +928,12 @@ function updateGame(dt) {
   state.pixelTimer = Math.max(0, state.pixelTimer - dt);
   if (state.pixelTimer <= 0) canvas.classList.remove('power-effect');
 
+  state.nextBotJoinMs -= dt * 1000;
+  if (state.nextBotJoinMs <= 0) {
+    spawnAdditionalBot();
+    state.nextBotJoinMs = CONFIG.botJoinIntervalMs;
+  }
+
   updateEntities(dt);
   updateNearMiss(dt);
   updatePowerups(dt);
@@ -877,15 +966,20 @@ function renderTrailOptions() {
     btn.addEventListener('click', () => {
       state.selectedTrail = style;
       const p = player();
-      const body = p?.mesh?.children?.[0];
-      if (body?.material) {
-        p.color = style.color;
-        body.material.color.setHex(hexToInt(style.color));
-        body.material.emissive.setHex(hexToInt(style.color));
+      if (p) {
+        recolorEntity(p, style.color);
       }
-      if (p?.trailMaterial) {
-        syncEntityTrailColor(p);
+
+      const usedBotColors = new Set();
+      for (const bot of state.entities.filter((e) => !e.isPlayer)) {
+        if (bot.color.toLowerCase() === style.color.toLowerCase() || usedBotColors.has(bot.color.toLowerCase())) {
+          const newColor = pickUniqueBotColor(style.color, usedBotColors);
+          recolorEntity(bot, newColor);
+        } else {
+          usedBotColors.add(bot.color.toLowerCase());
+        }
       }
+
       renderTrailOptions();
     });
 
