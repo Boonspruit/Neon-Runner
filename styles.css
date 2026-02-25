@@ -81,6 +81,7 @@ button.active {
 }
 
 canvas {
+  touch-action: none;
   width: 100%;
   height: min(72vh, 700px);
   border-radius: 12px;
@@ -109,8 +110,25 @@ canvas {
 }
 
 @media (max-width: 720px) {
+  body {
+    min-height: 100dvh;
+  }
+
+  .app {
+    min-height: 100dvh;
+    padding: 0.4rem;
+  }
+
+  .arena-wrap {
+    min-height: 68dvh;
+  }
+
+  canvas {
+    height: 68dvh;
+  }
+
   .stats,
   .status-row {
-    font-size: 0.92rem;
+    font-size: 0.88rem;
   }
 }

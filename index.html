@@ -29,18 +29,42 @@
         <div class="overlay" id="overlay">
           <h2 id="overlay-title">Swipe or Use Arrow Keys</h2>
           <p id="overlay-text">
-            Last as long as possible while AI bots box you in. Collect power-ups and ride close to light walls for bonuses.
+            Drive across the Tron grid and dodge bot light walls. Swipe like Subway Surfers (or use arrow keys) to turn instantly and survive the longest.
           </p>
           <button id="start-btn" type="button">Start Run</button>
         </div>
       </section>
 
       <section class="controls-help">
-        <p><strong>Desktop:</strong> Arrow keys / WASD to turn.</p>
-        <p><strong>Phone:</strong> Swipe in any direction like Subway Surfers.</p>
+        <p><strong>Desktop:</strong> Arrow keys / WASD to steer your Tron rider.</p>
+        <p><strong>Phone:</strong> Swipe controls like Subway Surfers (down swipe also triggers System Overload).</p>
       </section>
     </main>
 
-    <script src="game.js"></script>
+    <script>
+      (function () {
+        function loadScript(src) {
+          return new Promise(function (resolve, reject) {
+            var script = document.createElement('script');
+            script.src = src;
+            script.onload = resolve;
+            script.onerror = reject;
+            document.head.appendChild(script);
+          });
+        }
+
+        function startGameScript() {
+          var gameScript = document.createElement('script');
+          gameScript.src = 'game.js';
+          document.body.appendChild(gameScript);
+        }
+
+        loadScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r160/three.min.js')
+          .catch(function () {
+            return loadScript('https://unpkg.com/three@0.160.0/build/three.min.js');
+          })
+          .finally(startGameScript);
+      })();
+    </script>
   </body>
 </html>
