@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Neon Runner: Tron Survival</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <section class="hud">
+        <h1>Neon Runner</h1>
+        <div class="stats">
+          <span>Score: <strong id="score">0</strong></span>
+          <span>Time: <strong id="time">0.0s</strong></span>
+          <span>Speed: <strong id="speed">1.0x</strong></span>
+          <span>Close-Call: <strong id="multiplier">1.0x</strong></span>
+        </div>
+        <div class="status-row">
+          <span>Phase Shift: <strong id="phase-status">0</strong></span>
+          <span>System Overload: <strong id="overload-status">Ready</strong></span>
+          <button id="audio-toggle" type="button">Start Audio</button>
+        </div>
+        <div class="customization" id="trail-options"></div>
+      </section>
+
+      <section class="arena-wrap">
+        <canvas id="game" aria-label="Neon Runner game canvas"></canvas>
+        <div class="overlay" id="overlay">
+          <h2 id="overlay-title">Swipe or Use Arrow Keys</h2>
+          <p id="overlay-text">
+            Last as long as possible while AI bots box you in. Collect power-ups and ride close to light walls for bonuses.
+          </p>
+          <button id="start-btn" type="button">Start Run</button>
+        </div>
+      </section>
+
+      <section class="controls-help">
+        <p><strong>Desktop:</strong> Arrow keys / WASD to turn.</p>
+        <p><strong>Phone:</strong> Swipe in any direction like Subway Surfers.</p>
+      </section>
+    </main>
+
+    <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+    <script src="game.js"></script>
+  </body>
+</html>
