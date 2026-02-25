@@ -48,6 +48,7 @@ const state = {
   trails: [],
   particles: [],
   entities: [],
+  nextEntityId: 1,
   selectedTrail: TRAIL_STYLES[0],
   unlockedTrailScore: 0,
 };
@@ -90,6 +91,7 @@ function createEntity(isPlayer, color) {
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
   return {
+    id: state.nextEntityId++,
     isPlayer,
     color,
     x: randomIn(pad, w - pad),
@@ -115,6 +117,7 @@ function resetGame() {
   state.trails = [];
   state.particles = [];
 
+  state.nextEntityId = 1;
   state.entities = [createEntity(true, state.selectedTrail.color)];
   for (let i = 0; i < CONFIG.botCount; i += 1) {
     const botColors = ['#ff2cc6', '#ff7c4d', '#54ff8c', '#8b7bff'];
@@ -187,6 +190,8 @@ function addTrailPoint(entity) {
     y: entity.y,
     color: entity.color,
     owner: entity.isPlayer ? 'player' : 'bot',
+    ownerId: entity.id,
+    bornAt: state.survived,
   });
 
   const style = entity.isPlayer ? state.selectedTrail : { particle: 'spark', color: entity.color };
@@ -215,6 +220,8 @@ function detectCollision(entity) {
 
   for (let i = 0; i < state.trails.length; i += 1) {
     const t = state.trails[i];
+    if (t.ownerId === entity.id && state.survived - t.bornAt < 0.22) continue;
+    if (distSq(entity, t) < 18) {
     if (distSq(entity, t) < 32) {
       return true;
     }
@@ -364,6 +371,15 @@ function updateEntities(dt) {
         pulseSynth(560, 0.08);
       } else {
         entity.alive = false;
+        return;
+      }
+    }
+
+    entity.trailEvery -= dt;
+    if (entity.trailEvery <= 0) {
+      entity.trailEvery = CONFIG.segmentSize / Math.max(speed, 1);
+      addTrailPoint(entity);
+    }
       }
     }
   });
