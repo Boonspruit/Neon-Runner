@@ -222,6 +222,7 @@ function detectCollision(entity) {
     const t = state.trails[i];
     if (t.ownerId === entity.id && state.survived - t.bornAt < 0.22) continue;
     if (distSq(entity, t) < 18) {
+    if (distSq(entity, t) < 32) {
       return true;
     }
   }
@@ -356,6 +357,12 @@ function updateEntities(dt) {
     entity.x += entity.dir.x * speed * dt;
     entity.y += entity.dir.y * speed * dt;
 
+    entity.trailEvery -= dt;
+    if (entity.trailEvery <= 0) {
+      entity.trailEvery = CONFIG.segmentSize / Math.max(speed, 1);
+      addTrailPoint(entity);
+    }
+
     if (detectCollision(entity)) {
       if (index === 0 && state.phaseCharges > 0) {
         state.phaseCharges -= 1;
@@ -372,6 +379,8 @@ function updateEntities(dt) {
     if (entity.trailEvery <= 0) {
       entity.trailEvery = CONFIG.segmentSize / Math.max(speed, 1);
       addTrailPoint(entity);
+    }
+      }
     }
   });
 
