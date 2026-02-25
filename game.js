@@ -461,14 +461,14 @@ function spawnAdditionalBot() {
   const botCount = state.entities.filter((e) => !e.isPlayer).length;
   if (botCount >= CONFIG.maxBots) return;
 
-  const [x, z, d] = BOT_SPAWNS[state.botSpawnCursor % BOT_SPAWNS.length];
+  const [x, z] = BOT_SPAWNS[state.botSpawnCursor % BOT_SPAWNS.length];
   state.botSpawnCursor += 1;
 
   const usedBotColors = new Set(
     state.entities.filter((e) => !e.isPlayer).map((e) => e.color.toLowerCase())
   );
   const botColor = pickUniqueBotColor(state.selectedTrail.color, usedBotColors);
-  state.entities.push(createEntity(false, botColor, x, z, d));
+  state.entities.push(createEntity(false, botColor, x, z, centerBiasDir(x, z)));
 }
 
 function resetGame() {
@@ -484,9 +484,9 @@ function resetGame() {
 
   const usedBotColors = new Set();
   for (let i = 0; i < CONFIG.botCount; i += 1) {
-    const [x, z, d] = BOT_SPAWNS[i % BOT_SPAWNS.length];
+    const [x, z] = BOT_SPAWNS[i % BOT_SPAWNS.length];
     const botColor = pickUniqueBotColor(state.selectedTrail.color, usedBotColors);
-    state.entities.push(createEntity(false, botColor, x, z, d));
+    state.entities.push(createEntity(false, botColor, x, z, centerBiasDir(x, z)));
     state.botSpawnCursor += 1;
   }
 
@@ -555,26 +555,9 @@ function setupControls() {
 
 
 function selectBotTarget(bot) {
-  const alive = state.entities.filter((e) => e.alive && e.id !== bot.id);
-  if (!alive.length) return player();
-
-  if (bot.targetId) {
-    const keep = alive.find((e) => e.id === bot.targetId);
-    if (keep) return keep;
-  }
-
-  alive.sort((a, b) => {
-    const apri = a.isPlayer ? 0 : 1;
-    const bpri = b.isPlayer ? 0 : 1;
-    if (apri !== bpri) return apri - bpri;
-
-    const ad = distSq2D(bot, a);
-    const bd = distSq2D(bot, b);
-    return ad - bd;
-  });
-
-  bot.targetId = alive[0].id;
-  return alive[0];
+  const p = player();
+  bot.targetId = p?.id ?? null;
+  return p;
 }
 
 function wallInterceptScore(bot, optDir, target) {
@@ -718,6 +701,71 @@ function optionTowardTarget(bot, target) {
   return dz > 0 ? 2 : 0;
 }
 
+function centerBiasDir(x, z) {
+  if (Math.abs(x) > Math.abs(z)) return x > 0 ? 3 : 1;
+  return z > 0 ? 0 : 2;
+}
+
+function playerCutoffTurn(bot) {
+  const p = player();
+  if (!p?.alive || !bot.alive) return null;
+
+  const bd = entityDir(bot);
+  const pd = entityDir(p);
+  const sameHeading = bd.x * pd.x + bd.z * pd.z > 0.85;
+  if (!sameHeading) return null;
+
+  const relX = bot.x - p.x;
+  const relZ = bot.z - p.z;
+  const aheadDist = relX * pd.x + relZ * pd.z;
+  if (aheadDist < 8 || aheadDist > 48) return null;
+
+  const lateral = relX * pd.z - relZ * pd.x;
+  const lateralAbs = Math.abs(lateral);
+  if (lateralAbs > 12) return null;
+
+  if (Math.abs(pd.x) > 0) {
+    return lateral >= 0 ? 2 : 0;
+  }
+  return lateral >= 0 ? 3 : 1;
+}
+
+function rammingAmbushScore(bot, optDir) {
+  const p = player();
+  if (!p?.alive) return 0;
+
+  const pd = entityDir(p);
+  const relX = bot.x - p.x;
+  const relZ = bot.z - p.z;
+  const aheadDist = relX * pd.x + relZ * pd.z;
+  if (aheadDist < 8) return 0;
+
+  const lateralDist = Math.abs(relX * pd.z - relZ * pd.x);
+  if (lateralDist > 24) return 0;
+
+  const aheadWeight = Math.min(1, (aheadDist - 8) / 36);
+  const laneWeight = Math.max(0, 1 - (lateralDist / 24));
+  const ambushWeight = aheadWeight * laneWeight;
+  if (ambushWeight <= 0) return 0;
+
+  const d = DIR[optDir];
+  const playerFuture = {
+    x: p.x + pd.x * Math.min(34, 12 + aheadDist * 0.65),
+    z: p.z + pd.z * Math.min(34, 12 + aheadDist * 0.65),
+  };
+  const botFuture = {
+    x: bot.x + d.x * (10 + ambushWeight * 14),
+    z: bot.z + d.z * (10 + ambushWeight * 14),
+  };
+
+  const closing = Math.max(0, 30 - Math.sqrt(distSq2D(botFuture, playerFuture)));
+  const crossLane = Math.abs((playerFuture.x - botFuture.x) * d.z - (playerFuture.z - botFuture.z) * d.x);
+  const laneCut = Math.max(0, 16 - crossLane);
+  const headOn = (d.x * pd.x + d.z * pd.z < -0.4) ? 18 : 0;
+
+  return ambushWeight * (closing * 2.4 + laneCut * 1.9 + headOn);
+}
+
 
 function willHitOwnTrailSoon(bot, dirIndex, horizon = 18) {
   const d = DIR[dirIndex];
@@ -758,6 +806,12 @@ function aiTurn(bot, dt) {
   if (bot.thinkTimer > 0) return;
   bot.thinkTimer = randomIn(0.04, 0.13);
 
+  const forcedCut = playerCutoffTurn(bot);
+  if (forcedCut !== null && !willHitOwnTrailSoon(bot, forcedCut, 9)) {
+    bot.dirIndex = forcedCut;
+    return;
+  }
+
   const options = [bot.dirIndex, (bot.dirIndex + 3) % 4, (bot.dirIndex + 1) % 4];
   const target = selectBotTarget(bot);
   const targetDir = entityDir(target);
@@ -778,6 +832,7 @@ function aiTurn(bot, dt) {
     const tFuture = { x: target.x + targetDir.x * 14, z: target.z + targetDir.z * 14 };
     score += Math.max(0, 120 - distSq2D(probe, tFuture));
     score += wallInterceptScore(bot, opt, target) * 1.3;
+    if (target?.isPlayer) score += rammingAmbushScore(bot, opt) * 1.25;
     score += projectedFreeSpace(bot, opt) * 0.95;
     score += pathfindExitScore(bot, opt);
 
