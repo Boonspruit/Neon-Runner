@@ -31,12 +31,22 @@
           <div class="customization" id="trail-options"></div>
         </div>
         <div class="overlay" id="overlay">
-          <h2 id="overlay-title">Left/Right Steering</h2>
+          <h2 id="overlay-title">Neon Runner</h2>
           <p id="overlay-text">
-            Tron arena survival. Use left/right controls to turn your bike relative to its current direction and avoid bot light walls.
+            Survive the neon grid. Turn left/right, dodge walls, and outlast aggressive bot riders.
           </p>
-          <button id="new-player-btn" type="button" class="secondary">New Player</button>
-          <button id="start-btn" type="button">Start Run</button>
+          <div class="start-actions">
+            <button id="start-btn" type="button">Play</button>
+            <button id="new-player-btn" type="button" class="secondary">New Player</button>
+          </div>
+          <section class="start-panel" aria-label="Leaderboard">
+            <h3>Leaderboard</h3>
+            <ol id="leaderboard-list"></ol>
+          </section>
+          <section class="start-panel" aria-label="Skins">
+            <h3>Skins / Colors</h3>
+            <div class="customization" id="start-trail-options"></div>
+          </section>
         </div>
       </section>
 

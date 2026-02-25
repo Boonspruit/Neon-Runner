@@ -129,6 +129,42 @@ canvas {
   border-radius: 12px;
 }
 
+.start-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.start-panel {
+  margin: 0.2rem auto 0;
+  width: min(520px, 92%);
+  text-align: left;
+  background: rgba(7, 10, 24, 0.55);
+  border: 1px solid rgba(23, 242, 255, 0.38);
+  border-radius: 10px;
+  padding: 0.55rem 0.7rem;
+  box-shadow: 0 0 22px rgba(23, 242, 255, 0.14), inset 0 0 18px rgba(136, 86, 255, 0.14);
+}
+
+.start-panel h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--neon-cyan);
+}
+
+#leaderboard-list {
+  margin: 0;
+  padding-left: 1.15rem;
+  font-size: 0.84rem;
+}
+
+#leaderboard-list li {
+  margin: 0.15rem 0;
+}
+
 .overlay.hidden {
   display: none;
 }

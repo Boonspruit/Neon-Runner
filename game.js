@@ -13,9 +13,11 @@ const ui = {
   overlayText: document.getElementById('overlay-text'),
   startBtn: document.getElementById('start-btn'),
   newPlayerBtn: document.getElementById('new-player-btn'),
+  leaderboardList: document.getElementById('leaderboard-list'),
   audioBtn: document.getElementById('audio-toggle'),
   fullscreenBtn: document.getElementById('fullscreen-btn'),
   trailOptions: document.getElementById('trail-options'),
+  startTrailOptions: document.getElementById('start-trail-options'),
   inGameMenu: document.getElementById('in-game-menu'),
   bgm: document.getElementById('bgm'),
 };
@@ -25,13 +27,24 @@ const STORAGE_KEY = 'neonRunnerProfile.v1';
 function loadProfile() {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { name: 'Runner-01', bestScore: 0 };
+    if (!raw) return { name: 'Runner-01', bestScore: 0, leaderboard: [] };
     const parsed = JSON.parse(raw);
     const name = (parsed?.name || 'Runner-01').toString().slice(0, 20);
     const bestScore = Number.isFinite(parsed?.bestScore) ? Math.max(0, parsed.bestScore) : 0;
-    return { name, bestScore };
+    const leaderboard = Array.isArray(parsed?.leaderboard)
+      ? parsed.leaderboard
+        .filter((entry) => entry && typeof entry.name === 'string' && Number.isFinite(entry.score))
+        .map((entry) => ({
+          name: entry.name.slice(0, 20),
+          score: Math.max(0, Math.floor(entry.score)),
+          time: Number.isFinite(entry.time) ? Math.max(0, entry.time) : 0,
+        }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 8)
+      : [];
+    return { name, bestScore, leaderboard };
   } catch (error) {
-    return { name: 'Runner-01', bestScore: 0 };
+    return { name: 'Runner-01', bestScore: 0, leaderboard: [] };
   }
 }
 
@@ -40,6 +53,7 @@ function saveProfile() {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
       name: state.playerName,
       bestScore: state.bestScore,
+      leaderboard: state.leaderboard,
     }));
   } catch (error) {
     // Ignore storage failures.
@@ -155,6 +169,7 @@ const state = {
   pixelTimer: 0,
   playerName: 'Runner-01',
   bestScore: 0,
+  leaderboard: [],
 };
 
 const audio = {
@@ -1197,47 +1212,89 @@ function updateUi() {
 
   state.unlockedTrailScore = Math.max(state.unlockedTrailScore, state.score);
   renderTrailOptions();
+  renderLeaderboard();
 }
 
 function renderTrailOptions() {
-  ui.trailOptions.innerHTML = '';
+  if (ui.trailOptions) ui.trailOptions.innerHTML = '';
+  if (ui.startTrailOptions) ui.startTrailOptions.innerHTML = '';
+
+  function appendButton(target, btn) {
+    if (target) target.appendChild(btn);
+  }
+
   for (const style of TRAIL_STYLES) {
     const unlocked = state.unlockedTrailScore >= style.unlock;
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.textContent = unlocked ? style.label : `${style.label} (${style.unlock})`;
-    btn.disabled = !unlocked;
-    if (state.selectedTrail.id === style.id) btn.classList.add('active');
 
-    btn.addEventListener('click', () => {
-      state.selectedTrail = style;
-      const p = player();
-      if (p) {
-        recolorEntity(p, style.color);
-      }
+    function createStyleButton() {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = unlocked ? style.label : `${style.label} (${style.unlock})`;
+      btn.disabled = !unlocked;
+      if (state.selectedTrail.id === style.id) btn.classList.add('active');
 
-      const usedBotColors = new Set();
-      for (const bot of state.entities.filter((e) => !e.isPlayer)) {
-        if (bot.color.toLowerCase() === style.color.toLowerCase() || usedBotColors.has(bot.color.toLowerCase())) {
-          const newColor = pickUniqueBotColor(style.color, usedBotColors);
-          recolorEntity(bot, newColor);
-        } else {
-          usedBotColors.add(bot.color.toLowerCase());
+      btn.addEventListener('click', () => {
+        state.selectedTrail = style;
+        const p = player();
+        if (p) {
+          recolorEntity(p, style.color);
         }
-      }
 
-      renderTrailOptions();
-    });
+        const usedBotColors = new Set();
+        for (const bot of state.entities.filter((e) => !e.isPlayer)) {
+          if (bot.color.toLowerCase() === style.color.toLowerCase() || usedBotColors.has(bot.color.toLowerCase())) {
+            const newColor = pickUniqueBotColor(style.color, usedBotColors);
+            recolorEntity(bot, newColor);
+          } else {
+            usedBotColors.add(bot.color.toLowerCase());
+          }
+        }
 
-    ui.trailOptions.appendChild(btn);
+        renderTrailOptions();
+      });
+      return btn;
+    }
+
+    appendButton(ui.trailOptions, createStyleButton());
+    appendButton(ui.startTrailOptions, createStyleButton());
+  }
+}
+
+function renderLeaderboard() {
+  if (!ui.leaderboardList) return;
+  ui.leaderboardList.innerHTML = '';
+
+  const rows = [...state.leaderboard]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8);
+
+  if (!rows.length) {
+    const li = document.createElement('li');
+    li.textContent = 'No runs yet — be the first to post a score.';
+    ui.leaderboardList.appendChild(li);
+    return;
+  }
+
+  for (const row of rows) {
+    const li = document.createElement('li');
+    li.textContent = `${row.name} — ${Math.floor(row.score)} pts (${row.time.toFixed(1)}s)`;
+    ui.leaderboardList.appendChild(li);
   }
 }
 
 function render() {
   const pulse = 0.2 + Math.sin(state.survived * 2.5) * 0.06;
   gfx.floor.material.emissiveIntensity = pulse;
-  if (gfx.bloomPass) gfx.bloomPass.strength = 0.85 + Math.min(0.8, state.speedMul * 0.18);
-  if (gfx.chromaPass) gfx.chromaPass.uniforms.amount.value = 0.00075 + Math.min(0.003, state.speedMul * 0.00045);
+  const neonPulse = 0.5 + Math.sin(state.survived * 4.6) * 0.5;
+  if (gfx.bloomPass) {
+    const speedBoost = state.running ? state.speedMul : 1;
+    gfx.bloomPass.strength = 1.05 + Math.min(1.1, speedBoost * 0.24) + neonPulse * 0.22;
+    gfx.bloomPass.radius = 0.72 + neonPulse * 0.12;
+  }
+  if (gfx.chromaPass) {
+    const speedBoost = state.running ? state.speedMul : 1;
+    gfx.chromaPass.uniforms.amount.value = 0.0012 + Math.min(0.0038, speedBoost * 0.00058) + neonPulse * 0.00035;
+  }
   if (gfx.composer) {
     gfx.composer.render();
   } else {
@@ -1270,10 +1327,20 @@ function startGame() {
 
 function endGame() {
   state.running = false;
+
+  state.leaderboard.push({
+    name: state.playerName,
+    score: Math.floor(state.score),
+    time: Number(state.survived.toFixed(1)),
+  });
+  state.leaderboard.sort((a, b) => b.score - a.score);
+  state.leaderboard = state.leaderboard.slice(0, 8);
+
   if (state.score > state.bestScore) {
     state.bestScore = state.score;
-    saveProfile();
   }
+  saveProfile();
+
   document.body.classList.remove('game-active');
   ui.overlay.classList.remove('hidden');
   ui.overlayTitle.textContent = 'Run Ended';
@@ -1439,6 +1506,7 @@ prepareBgm();
 const profile = loadProfile();
 state.playerName = profile.name;
 state.bestScore = profile.bestScore;
+state.leaderboard = profile.leaderboard;
 
 if (typeof window.THREE === 'undefined') {
   ui.overlayTitle.textContent = 'Three.js failed to load';
