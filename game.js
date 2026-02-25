@@ -274,6 +274,29 @@ function setupControls() {
   }, { passive: true });
 }
 
+
+function selectBotTarget(bot) {
+  const opponents = state.entities.filter((e) => e.alive && e.id !== bot.id);
+  opponents.sort((a, b) => {
+    const ap = a.isPlayer ? 0 : 1;
+    const bp = b.isPlayer ? 0 : 1;
+    if (ap !== bp) return ap - bp;
+    return distSq2D(bot, a) - distSq2D(bot, b);
+  });
+  return opponents[0] || player();
+}
+
+function wallInterceptScore(bot, optDir, target) {
+  const d = DIR[optDir];
+  const td = entityDir(target);
+  const tFuture = { x: target.x + td.x * 12, z: target.z + td.z * 12 };
+  const wallFuture = { x: bot.x + d.x * 12, z: bot.z + d.z * 12 };
+
+  const laneCut = Math.abs((tFuture.x - wallFuture.x) * d.z - (tFuture.z - wallFuture.z) * d.x);
+  const approach = Math.max(0, 22 - Math.sqrt(distSq2D(wallFuture, tFuture)));
+  return Math.max(0, 12 - laneCut) + approach;
+}
+
 function estimateDanger(x, z, dirIndex, entityId) {
   const d = DIR[dirIndex];
   let penalty = 0;
@@ -297,18 +320,26 @@ function aiTurn(bot, dt) {
   bot.thinkTimer = randomIn(0.08, 0.2);
 
   const options = [bot.dirIndex, (bot.dirIndex + 3) % 4, (bot.dirIndex + 1) % 4];
-  const p = player();
-  const pDir = entityDir(p);
+  const target = selectBotTarget(bot);
+  const targetDir = entityDir(target);
   let best = options[0];
   let bestScore = -Infinity;
 
   for (const opt of options) {
     const d = DIR[opt];
     const probe = { x: bot.x + d.x * 10, z: bot.z + d.z * 10 };
-    let score = randomIn(0, 7) - estimateDanger(bot.x, bot.z, opt, bot.id);
-    const pFuture = { x: p.x + pDir.x * 13, z: p.z + pDir.z * 13 };
-    score += Math.max(0, 100 - distSq2D(probe, pFuture));
-    if (score > bestScore) { bestScore = score; best = opt; }
+    let score = randomIn(0, 5);
+
+    score -= estimateDanger(bot.x, bot.z, opt, bot.id);
+
+    const tFuture = { x: target.x + targetDir.x * 14, z: target.z + targetDir.z * 14 };
+    score += Math.max(0, 120 - distSq2D(probe, tFuture));
+    score += wallInterceptScore(bot, opt, target);
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = opt;
+    }
   }
 
   bot.dirIndex = best;
@@ -354,6 +385,7 @@ function updateEntities(dt) {
       } else {
         e.alive = false;
         e.mesh.visible = false;
+        if (e.isPlayer) playCrashSound();
         continue;
       }
     }
@@ -368,9 +400,19 @@ function updateEntities(dt) {
     e.mesh.rotation.y = e.dirIndex * (Math.PI / 2);
   }
 
-  const fadeAge = Math.max(8, 28 - state.survived * 0.12);
+  const fadeAge = Math.max(4.5, 18 - state.survived * 0.18);
   state.trails = state.trails.filter((t) => {
-    if (state.survived - t.bornAt > fadeAge) {
+    const age = state.survived - t.bornAt;
+    const life = 1 - age / fadeAge;
+    const opacity = Math.max(0, Math.min(1, life));
+
+    if (t.mesh?.material) {
+      t.mesh.material.transparent = true;
+      t.mesh.material.opacity = opacity;
+      t.mesh.material.emissiveIntensity = 0.2 + opacity * 0.6;
+    }
+
+    if (age > fadeAge) {
       gfx.scene.remove(t.mesh);
       return false;
     }
@@ -559,6 +601,23 @@ function endGame() {
   ui.overlayTitle.textContent = 'Run Ended';
   ui.overlayText.textContent = `Survived ${state.survived.toFixed(1)}s | Score ${Math.floor(state.score)}. Press Space or Try Again.`;
   ui.startBtn.textContent = 'Try Again';
+}
+
+function playCrashSound() {
+  if (!audio.context || !audio.active) return;
+  const now = audio.context.currentTime;
+  const osc = audio.context.createOscillator();
+  const gain = audio.context.createGain();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(240, now);
+  osc.frequency.exponentialRampToValueAtTime(45, now + 0.2);
+  gain.gain.setValueAtTime(0.001, now);
+  gain.gain.exponentialRampToValueAtTime(0.14, now + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
+  osc.connect(gain);
+  gain.connect(audio.master);
+  osc.start(now);
+  osc.stop(now + 0.25);
 }
 
 function triggerSynth(freq = 220, duration = 0.08, type = 'triangle') {
