@@ -1,4 +1,5 @@
 const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
 
 const ui = {
   score: document.getElementById('score'),
@@ -16,303 +17,146 @@ const ui = {
 };
 
 const CONFIG = {
-  lanes: [-8, 0, 8],
-  baseSpeed: 24,
-  maxSpeed: 52,
-  speedRamp: 0.42,
-  nearMissZ: 3.5,
-  obstacleSpacing: 14,
-  powerupSpacing: 36,
-  botCount: 3,
+  botCount: 4,
+  segmentSize: 5,
+  baseSpeed: 150,
+  speedRamp: 2.8,
+  nearMissDistance: 16,
+  powerupEveryMs: 5200,
 };
 
 const TRAIL_STYLES = [
   { id: 'cyan', label: 'Classic Cyan', unlock: 0, color: '#17f2ff', particle: 'spark' },
-  { id: 'magenta', label: 'Magenta Surge', unlock: 120, color: '#ff2cc6', particle: 'spark' },
-  { id: 'amber', label: 'Amber Binary', unlock: 260, color: '#ffbb33', particle: 'binary' },
-  { id: 'void', label: 'Void Glitch', unlock: 420, color: '#9f7bff', particle: 'binary' },
+  { id: 'magenta', label: 'Magenta Surge', unlock: 80, color: '#ff2cc6', particle: 'spark' },
+  { id: 'amber', label: 'Amber Binary', unlock: 180, color: '#ffbb33', particle: 'binary' },
+  { id: 'void', label: 'Void Glitch', unlock: 320, color: '#9f7bff', particle: 'binary' },
 ];
 
 const state = {
   running: false,
-  survived: 0,
+  lastTime: 0,
   score: 0,
-  speed: CONFIG.baseSpeed,
+  survived: 0,
+  speedMultiplier: 1,
   closeCallMultiplier: 1,
   nearMissCooldown: 0,
   phaseCharges: 0,
   overloadTimer: 0,
   overloadCooldown: 0,
-  nextObstacleZ: 60,
-  nextPowerupZ: 90,
+  powerups: [],
+  nextPowerup: 0,
+  trails: [],
+  particles: [],
+  entities: [],
+  nextEntityId: 1,
   selectedTrail: TRAIL_STYLES[0],
   unlockedTrailScore: 0,
-  lastTime: 0,
-  player: null,
-  bots: [],
-  obstacles: [],
-  powerups: [],
-  particles: [],
-  touchedFullscreen: false,
-  renderDisabled: false,
 };
 
 const audio = {
   context: null,
   master: null,
   bass: null,
+  pulse: null,
   beatTimer: null,
   active: false,
 };
 
-const gfx = {
-  renderer: null,
-  scene: null,
-  camera: null,
-  road: null,
-  laneLines: [],
-  chaseOffset: new THREE.Vector3(0, 9, -19),
-};
-
-function laneX(index) {
-  return CONFIG.lanes[Math.max(0, Math.min(CONFIG.lanes.length - 1, index))];
+function resizeCanvas() {
+  const bounds = canvas.getBoundingClientRect();
+  canvas.width = Math.floor(bounds.width * window.devicePixelRatio);
+  canvas.height = Math.floor(bounds.height * window.devicePixelRatio);
+  ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
 }
 
 function randomIn(min, max) {
   return Math.random() * (max - min) + min;
 }
 
-function hexToInt(hex) {
-  return Number.parseInt(hex.replace('#', '0x'), 16);
+function randomDir() {
+  return [
+    { x: 1, y: 0 },
+    { x: -1, y: 0 },
+    { x: 0, y: 1 },
+    { x: 0, y: -1 },
+  ][Math.floor(Math.random() * 4)];
 }
 
-function createGlowMaterial(color, emissive = 0.9) {
-  return new THREE.MeshStandardMaterial({
-    color: hexToInt(color),
-    emissive: hexToInt(color),
-    emissiveIntensity: emissive,
-    roughness: 0.35,
-    metalness: 0.25,
-  });
+function cloneDir(dir) {
+  return { x: dir.x, y: dir.y };
 }
 
-function setupThree() {
-  gfx.scene = new THREE.Scene();
-  gfx.scene.background = new THREE.Color(0x05030b);
-  gfx.scene.fog = new THREE.Fog(0x05030b, 35, 230);
-
-  gfx.camera = new THREE.PerspectiveCamera(58, 1, 0.1, 500);
-
-  try {
-    gfx.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
-    gfx.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    gfx.renderer.outputColorSpace = THREE.SRGBColorSpace;
-  } catch (error) {
-    state.renderDisabled = true;
-    gfx.renderer = {
-      setSize() {},
-      render() {},
-    };
-  }
-
-  gfx.camera.position.set(0, 10, -22);
-
-  const hemi = new THREE.HemisphereLight(0x66f1ff, 0x080a14, 0.75);
-  const key = new THREE.DirectionalLight(0x7ad9ff, 0.85);
-  key.position.set(0, 25, -10);
-  gfx.scene.add(hemi, key);
-
-  const road = new THREE.Mesh(
-    new THREE.PlaneGeometry(42, 1200),
-    new THREE.MeshStandardMaterial({ color: 0x070b15, emissive: 0x050b15, emissiveIntensity: 0.45 })
-  );
-  road.rotation.x = -Math.PI / 2;
-  road.position.set(0, -0.55, 460);
-  gfx.scene.add(road);
-  gfx.road = road;
-
-  const sideWallGeom = new THREE.BoxGeometry(1.2, 3, 1200);
-  const leftWall = new THREE.Mesh(sideWallGeom, createGlowMaterial('#1f9cbf', 0.45));
-  leftWall.position.set(-13, 1, 460);
-  const rightWall = leftWall.clone();
-  rightWall.position.x = 13;
-  gfx.scene.add(leftWall, rightWall);
-
-  for (const x of [-4, 4]) {
-    const line = new THREE.Mesh(
-      new THREE.BoxGeometry(0.2, 0.06, 1200),
-      createGlowMaterial('#18c4e8', 0.65)
-    );
-    line.position.set(x, -0.48, 460);
-    gfx.scene.add(line);
-    gfx.laneLines.push(line);
-  }
-
-  const stars = new THREE.Group();
-  for (let i = 0; i < 160; i += 1) {
-    const s = new THREE.Mesh(
-      new THREE.SphereGeometry(0.08, 6, 6),
-      new THREE.MeshBasicMaterial({ color: i % 2 ? 0x8d8dff : 0x17f2ff })
-    );
-    s.position.set(randomIn(-80, 80), randomIn(18, 60), randomIn(-40, 400));
-    stars.add(s);
-  }
-  gfx.scene.add(stars);
-
-  resizeRenderer();
-}
-
-function resizeRenderer() {
-  const width = canvas.clientWidth;
-  const height = canvas.clientHeight;
-  gfx.renderer.setSize(width, height, false);
-  gfx.camera.aspect = width / Math.max(1, height);
-  gfx.camera.updateProjectionMatrix();
-}
-
-function createPlayer() {
-  const body = new THREE.Mesh(new THREE.BoxGeometry(2.1, 1, 3.5), createGlowMaterial(state.selectedTrail.color, 1.0));
-  const canopy = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.5, 1.4), createGlowMaterial('#dbf9ff', 0.3));
-  canopy.position.y = 0.6;
-  canopy.position.z = -0.1;
-  body.add(canopy);
-  gfx.scene.add(body);
-
+function createEntity(isPlayer, color) {
+  const pad = 80;
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
   return {
-    lane: 1,
-    targetLane: 1,
-    x: laneX(1),
-    z: 0,
-    y: 0.25,
+    id: state.nextEntityId++,
+    isPlayer,
+    color,
+    x: randomIn(pad, w - pad),
+    y: randomIn(pad, h - pad),
+    dir: randomDir(),
     alive: true,
-    mesh: body,
-    phaseBlink: 0,
-    overloadPulse: 0,
+    thinkTime: randomIn(0.1, 0.4),
+    trailEvery: 0,
   };
-}
-
-function createBot(index) {
-  const colors = ['#ff2cc6', '#ffa24d', '#79ff7a'];
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.8, 2.8), createGlowMaterial(colors[index % colors.length], 0.95));
-  const lane = index % 3;
-  const z = 24 + index * 18;
-  mesh.position.set(laneX(lane), 0.25, z);
-  gfx.scene.add(mesh);
-
-  return {
-    lane,
-    z,
-    mesh,
-    driftTimer: randomIn(0.9, 1.7),
-    dropTimer: randomIn(0.45, 1.2),
-    color: colors[index % colors.length],
-  };
-}
-
-function createObstacle(lane, z, owner = 'ai', color = '#11b6e0') {
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(6.5, 2.4, 0.8), createGlowMaterial(color, 0.85));
-  mesh.position.set(laneX(lane), 0.95, z);
-  gfx.scene.add(mesh);
-  const obs = { lane, z, mesh, owner, passed: false, nearMissAwarded: false };
-  state.obstacles.push(obs);
-  return obs;
-}
-
-function createPowerup(type, lane, z) {
-  const color = type === 'phase' ? '#8dffef' : '#ff8ae4';
-  const mesh = new THREE.Mesh(new THREE.TorusGeometry(1, 0.3, 12, 20), createGlowMaterial(color, 1));
-  mesh.rotation.x = Math.PI / 2;
-  mesh.position.set(laneX(lane), 1.4, z);
-  gfx.scene.add(mesh);
-  state.powerups.push({ type, lane, z, mesh });
-}
-
-function cleanupRunObjects() {
-  const removeAll = (arr) => {
-    for (const item of arr) {
-      if (item.mesh) gfx.scene.remove(item.mesh);
-    }
-    arr.length = 0;
-  };
-
-  if (state.player?.mesh) gfx.scene.remove(state.player.mesh);
-  for (const bot of state.bots) gfx.scene.remove(bot.mesh);
-  removeAll(state.obstacles);
-  removeAll(state.powerups);
-  removeAll(state.particles);
-  state.bots = [];
-  state.player = null;
 }
 
 function resetGame() {
-  cleanupRunObjects();
-  state.running = false;
-  state.survived = 0;
   state.score = 0;
-  state.speed = CONFIG.baseSpeed;
+  state.survived = 0;
+  state.speedMultiplier = 1;
   state.closeCallMultiplier = 1;
   state.nearMissCooldown = 0;
   state.phaseCharges = 0;
   state.overloadTimer = 0;
   state.overloadCooldown = 0;
-  state.nextObstacleZ = 62;
-  state.nextPowerupZ = 95;
-  state.player = createPlayer();
+  state.powerups = [];
+  state.nextPowerup = CONFIG.powerupEveryMs;
+  state.trails = [];
+  state.particles = [];
 
+  state.nextEntityId = 1;
+  state.entities = [createEntity(true, state.selectedTrail.color)];
   for (let i = 0; i < CONFIG.botCount; i += 1) {
-    state.bots.push(createBot(i));
+    const botColors = ['#ff2cc6', '#ff7c4d', '#54ff8c', '#8b7bff'];
+    const bot = createEntity(false, botColors[i % botColors.length]);
+    state.entities.push(bot);
   }
-
-  for (let i = 0; i < 10; i += 1) {
-    spawnForwardObstacle();
-  }
-
-  updateUi();
-  render();
 }
 
-function spawnForwardObstacle() {
-  const lane = Math.floor(Math.random() * 3);
-  createObstacle(lane, state.nextObstacleZ, 'world', '#15a3ca');
+function isOpposite(a, b) {
+  return a.x + b.x === 0 && a.y + b.y === 0;
+}
 
-  if (Math.random() > 0.58) {
-    const blockLane = (lane + (Math.random() > 0.5 ? 1 : 2)) % 3;
-    createObstacle(blockLane, state.nextObstacleZ + 3.6, 'world', '#0f7fa3');
+function setPlayerDirection(target) {
+  const player = state.entities[0];
+  if (!player?.alive) return;
+  if (!isOpposite(player.dir, target)) {
+    player.dir = target;
   }
-
-  state.nextObstacleZ += CONFIG.obstacleSpacing + randomIn(2, 6.5);
-}
-
-function maybeSpawnPowerup() {
-  if (state.nextPowerupZ - state.player.z > 200) return;
-  const lane = Math.floor(Math.random() * 3);
-  const type = Math.random() > 0.5 ? 'phase' : 'overload';
-  createPowerup(type, lane, state.nextPowerupZ);
-  state.nextPowerupZ += CONFIG.powerupSpacing + randomIn(8, 14);
-}
-
-function setLane(targetLane) {
-  if (!state.player?.alive) return;
-  state.player.targetLane = Math.max(0, Math.min(2, targetLane));
 }
 
 function setupControls() {
   window.addEventListener('keydown', (event) => {
-    if (!state.player) return;
+    const map = {
+      ArrowUp: { x: 0, y: -1 },
+      ArrowDown: { x: 0, y: 1 },
+      ArrowLeft: { x: -1, y: 0 },
+      ArrowRight: { x: 1, y: 0 },
+      w: { x: 0, y: -1 },
+      s: { x: 0, y: 1 },
+      a: { x: -1, y: 0 },
+      d: { x: 1, y: 0 },
+    };
 
-    if (event.key === 'ArrowLeft' || event.key.toLowerCase() === 'a') {
+    if (map[event.key]) {
       event.preventDefault();
-      setLane(state.player.targetLane - 1);
+      setPlayerDirection(map[event.key]);
     }
-    if (event.key === 'ArrowRight' || event.key.toLowerCase() === 'd') {
-      event.preventDefault();
-      setLane(state.player.targetLane + 1);
-    }
-    if (event.key === 'ArrowUp' || event.key.toLowerCase() === 'w') {
-      event.preventDefault();
-      state.speed = Math.min(CONFIG.maxSpeed, state.speed + 0.9);
-    }
-    if (event.key === ' ' || event.key === 'ArrowDown' || event.key.toLowerCase() === 's') {
+
+    if (event.key.toLowerCase() === ' ') {
       event.preventDefault();
       activateOverload();
     }
@@ -321,11 +165,10 @@ function setupControls() {
   let touchStart = null;
   canvas.addEventListener('touchstart', (event) => {
     touchStart = event.changedTouches[0];
-    requestFullscreenIfMobile();
   }, { passive: true });
 
   canvas.addEventListener('touchend', (event) => {
-    if (!touchStart || !state.player) return;
+    if (!touchStart) return;
     const end = event.changedTouches[0];
     const dx = end.clientX - touchStart.clientX;
     const dy = end.clientY - touchStart.clientY;
@@ -334,249 +177,305 @@ function setupControls() {
     if (Math.max(absX, absY) < 20) return;
 
     if (absX > absY) {
-      setLane(state.player.targetLane + (dx > 0 ? 1 : -1));
-    } else if (dy < 0) {
-      state.speed = Math.min(CONFIG.maxSpeed, state.speed + 1.2);
+      setPlayerDirection({ x: Math.sign(dx), y: 0 });
     } else {
-      activateOverload();
+      setPlayerDirection({ x: 0, y: Math.sign(dy) });
     }
   }, { passive: true });
 }
 
+function addTrailPoint(entity) {
+  state.trails.push({
+    x: entity.x,
+    y: entity.y,
+    color: entity.color,
+    owner: entity.isPlayer ? 'player' : 'bot',
+    ownerId: entity.id,
+    bornAt: state.survived,
+  });
+
+  const style = entity.isPlayer ? state.selectedTrail : { particle: 'spark', color: entity.color };
+  if (Math.random() < 0.38) {
+    state.particles.push({
+      x: entity.x,
+      y: entity.y,
+      life: 0.6,
+      text: style.particle === 'binary' ? (Math.random() > 0.5 ? '0' : '1') : null,
+      color: style.color,
+    });
+  }
+}
+
+function distSq(a, b) {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return dx * dx + dy * dy;
+}
+
+function detectCollision(entity) {
+  const margin = 6;
+  if (entity.x < margin || entity.y < margin || entity.x > canvas.clientWidth - margin || entity.y > canvas.clientHeight - margin) {
+    return true;
+  }
+
+  for (let i = 0; i < state.trails.length; i += 1) {
+    const t = state.trails[i];
+    if (t.ownerId === entity.id && state.survived - t.bornAt < 0.22) continue;
+    if (distSq(entity, t) < 18) {
+    if (distSq(entity, t) < 32) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function awardNearMiss(dt) {
+  if (state.nearMissCooldown > 0) {
+    state.nearMissCooldown -= dt;
+    return;
+  }
+
+  const player = state.entities[0];
+  let close = false;
+  const nearSq = CONFIG.nearMissDistance * CONFIG.nearMissDistance;
+
+  for (let i = 0; i < state.trails.length; i += 1) {
+    const trail = state.trails[i];
+    if (trail.owner === 'player') continue;
+    const d = distSq(player, trail);
+    if (d < nearSq && d > 48) {
+      close = true;
+      break;
+    }
+  }
+
+  if (close) {
+    state.closeCallMultiplier = Math.min(5, state.closeCallMultiplier + 0.25);
+    state.speedMultiplier = Math.min(2.8, state.speedMultiplier + 0.03);
+    state.score += 8 * state.closeCallMultiplier;
+    state.nearMissCooldown = 0.35;
+    pulseSynth(320, 0.05);
+  } else {
+    state.closeCallMultiplier = Math.max(1, state.closeCallMultiplier - dt * 0.12);
+  }
+}
+
+function spawnPowerup() {
+  const types = ['phase', 'overload'];
+  state.powerups.push({
+    type: types[Math.floor(Math.random() * types.length)],
+    x: randomIn(40, canvas.clientWidth - 40),
+    y: randomIn(40, canvas.clientHeight - 40),
+    ttl: 10,
+  });
+}
+
 function activateOverload() {
-  if (state.overloadTimer > 0 || state.overloadCooldown > 0) return;
-  state.overloadTimer = 3.5;
-  state.overloadCooldown = 9.5;
-  pulseSynth(190, 0.1);
+  if (state.overloadCooldown > 0 || state.overloadTimer > 0) return;
+  state.overloadTimer = 3.8;
+  state.overloadCooldown = 10;
+  pulseSynth(180, 0.1);
 }
 
-function requestFullscreenIfMobile() {
-  if (state.touchedFullscreen) return;
-  if (window.matchMedia('(max-width: 900px)').matches && document.fullscreenElement == null) {
-    const root = document.documentElement;
-    if (root.requestFullscreen) {
-      root.requestFullscreen().catch(() => {});
-    }
-  }
-  state.touchedFullscreen = true;
-}
-
-function syncPlayer(dt) {
-  const p = state.player;
-  const targetX = laneX(p.targetLane);
-  p.x += (targetX - p.x) * Math.min(1, dt * 10);
-  if (Math.abs(targetX - p.x) < 0.06) {
-    p.x = targetX;
-    p.lane = p.targetLane;
-  }
-
-  const step = state.speed * dt * (state.overloadTimer > 0 ? 0.56 : 1);
-  p.z += step;
-
-  p.mesh.position.set(p.x, p.y, p.z);
-  p.mesh.rotation.y = (targetX - p.x) * 0.06;
-  p.overloadPulse += dt * 5;
-
-  const em = p.mesh.material;
-  if (state.overloadTimer > 0) {
-    em.emissiveIntensity = 1.2 + Math.sin(p.overloadPulse) * 0.2;
-  } else {
-    em.emissiveIntensity = 1.0;
-  }
-
-  if (state.phaseCharges > 0) {
-    p.phaseBlink += dt * 12;
-    p.mesh.material.opacity = 0.75 + Math.sin(p.phaseBlink) * 0.18;
-    p.mesh.material.transparent = true;
-  } else {
-    p.mesh.material.opacity = 1;
-    p.mesh.material.transparent = false;
-  }
-}
-
-function updateBots(dt) {
-  const speedFactor = state.overloadTimer > 0 ? 0.45 : 1;
-  for (const bot of state.bots) {
-    bot.z += (state.speed * 0.7 + 7) * dt * speedFactor;
-    bot.driftTimer -= dt;
-    bot.dropTimer -= dt;
-
-    if (bot.driftTimer <= 0) {
-      bot.lane = Math.floor(Math.random() * 3);
-      bot.driftTimer = randomIn(0.9, 1.8);
-    }
-
-    bot.mesh.position.set(laneX(bot.lane), 0.25, bot.z);
-
-    if (bot.dropTimer <= 0) {
-      createObstacle(bot.lane, bot.z + 4, 'bot', bot.color);
-      bot.dropTimer = randomIn(0.55, 1.35);
-    }
-
-    if (bot.z < state.player.z - 40) {
-      bot.z = state.player.z + randomIn(70, 120);
-      bot.lane = Math.floor(Math.random() * 3);
-      bot.mesh.position.z = bot.z;
-      bot.mesh.position.x = laneX(bot.lane);
-      bot.dropTimer = randomIn(0.4, 1);
-    }
-  }
-}
-
-function checkNearMissAndCollisions() {
-  const p = state.player;
-  for (const obs of state.obstacles) {
-    const dz = obs.z - p.z;
-    const sameLane = obs.lane === p.lane;
-
-    if (!obs.nearMissAwarded && Math.abs(dz) < CONFIG.nearMissZ && !sameLane && Math.abs(obs.lane - p.lane) === 1) {
-      state.closeCallMultiplier = Math.min(5, state.closeCallMultiplier + 0.22);
-      state.score += 10 * state.closeCallMultiplier;
-      state.nearMissCooldown = 0.24;
-      obs.nearMissAwarded = true;
-      pulseSynth(330, 0.04);
-    }
-
-    if (sameLane && Math.abs(dz) < 1.7) {
-      if (state.phaseCharges > 0) {
-        state.phaseCharges -= 1;
-        obs.passed = true;
-        obs.mesh.visible = false;
-        pulseSynth(570, 0.08);
-      } else {
-        p.alive = false;
-      }
-      return;
-    }
-  }
-
-  for (const power of state.powerups) {
-    if (power.lane === p.lane && Math.abs(power.z - p.z) < 1.8) {
-      if (power.type === 'phase') {
+function handlePowerupPickup() {
+  const player = state.entities[0];
+  state.powerups = state.powerups.filter((p) => {
+    p.ttl -= 1 / 60;
+    if (p.ttl <= 0) return false;
+    if (distSq(player, p) < 360) {
+      if (p.type === 'phase') {
         state.phaseCharges += 1;
       } else {
-        state.overloadTimer = 2.8;
-        state.overloadCooldown = Math.max(0, state.overloadCooldown - 3);
+        state.overloadCooldown = Math.max(0, state.overloadCooldown - 5);
+        state.overloadTimer = 2.6;
       }
-      state.score += 35;
-      power.collected = true;
-      power.mesh.visible = false;
-      pulseSynth(480, 0.07);
-    }
-  }
-}
-
-function updateObstaclesAndPowerups(dt) {
-  const minZ = state.player.z - 28;
-
-  state.obstacles = state.obstacles.filter((obs) => {
-    if (obs.z < minZ || obs.passed) {
-      gfx.scene.remove(obs.mesh);
-      return false;
-    }
-
-    if (!obs.passed && obs.z < state.player.z - 1.2) {
-      obs.passed = true;
-      if (!obs.nearMissAwarded && state.nearMissCooldown <= 0) {
-        state.closeCallMultiplier = Math.max(1, state.closeCallMultiplier - 0.03);
-      }
-    }
-
-    return true;
-  });
-
-  state.powerups = state.powerups.filter((p) => {
-    p.mesh.rotation.z += dt * 2;
-    if (p.z < minZ || p.collected) {
-      gfx.scene.remove(p.mesh);
+      state.score += 40;
+      pulseSynth(480, 0.08);
       return false;
     }
     return true;
   });
-
-  while (state.nextObstacleZ < state.player.z + 200) spawnForwardObstacle();
-  while (state.nextPowerupZ < state.player.z + 220) maybeSpawnPowerup();
 }
 
-function emitTrailParticles(dt) {
-  if (Math.random() > 0.62) return;
-  const p = state.player;
-  const binary = state.selectedTrail.particle === 'binary';
-  const particle = new THREE.Mesh(
-    new THREE.SphereGeometry(binary ? 0.17 : 0.12, 6, 6),
-    new THREE.MeshBasicMaterial({ color: hexToInt(state.selectedTrail.color), transparent: true, opacity: 0.95 })
-  );
-  particle.position.set(p.x + randomIn(-0.18, 0.18), 0.15, p.z - 2.1);
-  gfx.scene.add(particle);
+function aiTurn(bot, dt) {
+  bot.thinkTime -= dt;
+  if (bot.thinkTime > 0) return;
+  bot.thinkTime = randomIn(0.08, 0.3);
 
-  state.particles.push({
-    mesh: particle,
-    life: 0.7,
-    vy: randomIn(0.2, 0.45),
-    drift: randomIn(-0.55, 0.55),
-    binary,
+  const options = [
+    cloneDir(bot.dir),
+    { x: bot.dir.y, y: -bot.dir.x },
+    { x: -bot.dir.y, y: bot.dir.x },
+  ];
+
+  let best = options[0];
+  let bestScore = -Infinity;
+
+  options.forEach((dir) => {
+    if (isOpposite(bot.dir, dir)) return;
+    const probe = { x: bot.x + dir.x * 28, y: bot.y + dir.y * 28 };
+    let score = randomIn(0, 10);
+
+    if (probe.x < 20 || probe.y < 20 || probe.x > canvas.clientWidth - 20 || probe.y > canvas.clientHeight - 20) {
+      score -= 100;
+    }
+
+    for (let i = 0; i < state.trails.length; i += 1) {
+      if (distSq(probe, state.trails[i]) < 540) {
+        score -= 60;
+      }
+    }
+
+    const player = state.entities[0];
+    const pressureSpot = { x: player.x + player.dir.x * 40, y: player.y + player.dir.y * 40 };
+    score += Math.max(0, 180 - distSq(probe, pressureSpot) * 0.02);
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = dir;
+    }
   });
+
+  bot.dir = best;
+}
+
+function updateEntities(dt) {
+  const overloadFactor = state.overloadTimer > 0 ? 0.45 : 1;
+  const base = CONFIG.baseSpeed + state.survived * CONFIG.speedRamp;
+
+  state.entities.forEach((entity, index) => {
+    if (!entity.alive) return;
+
+    if (!entity.isPlayer) {
+      aiTurn(entity, dt * overloadFactor);
+    }
+
+    const speed = entity.isPlayer
+      ? base * state.speedMultiplier
+      : base * randomIn(0.88, 1.04) * overloadFactor;
+
+    entity.x += entity.dir.x * speed * dt;
+    entity.y += entity.dir.y * speed * dt;
+
+    entity.trailEvery -= dt;
+    if (entity.trailEvery <= 0) {
+      entity.trailEvery = CONFIG.segmentSize / Math.max(speed, 1);
+      addTrailPoint(entity);
+    }
+
+    if (detectCollision(entity)) {
+      if (index === 0 && state.phaseCharges > 0) {
+        state.phaseCharges -= 1;
+        entity.x += entity.dir.x * 20;
+        entity.y += entity.dir.y * 20;
+        pulseSynth(560, 0.08);
+      } else {
+        entity.alive = false;
+        return;
+      }
+    }
+
+    entity.trailEvery -= dt;
+    if (entity.trailEvery <= 0) {
+      entity.trailEvery = CONFIG.segmentSize / Math.max(speed, 1);
+      addTrailPoint(entity);
+    }
+      }
+    }
+  });
+
+  state.trails = state.trails.slice(-3000);
 }
 
 function updateParticles(dt) {
-  state.particles = state.particles.filter((p) => {
+  state.particles.forEach((p) => {
     p.life -= dt;
-    p.mesh.position.y += p.vy * dt;
-    p.mesh.position.x += p.drift * dt;
-    if (p.binary) p.mesh.position.z -= dt * 2.1;
-    p.mesh.material.opacity = Math.max(0, p.life / 0.7);
-    if (p.life <= 0) {
-      gfx.scene.remove(p.mesh);
-      return false;
-    }
-    return true;
+    p.y += 18 * dt;
   });
+  state.particles = state.particles.filter((p) => p.life > 0);
 }
 
-function updateCamera(dt) {
-  const p = state.player;
-  const target = new THREE.Vector3(p.x, 1.8, p.z + 16);
-  const pos = new THREE.Vector3(p.x, 8.8, p.z - 20);
-  gfx.camera.position.lerp(pos, Math.min(1, dt * 5));
-  gfx.camera.lookAt(target);
+function drawGrid() {
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  const step = 32;
+  ctx.strokeStyle = 'rgba(28, 122, 163, 0.18)';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < w; x += step) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, h);
+    ctx.stroke();
+  }
+  for (let y = 0; y < h; y += step) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+  }
 }
 
-function updateGame(dt) {
-  if (!state.player?.alive) return;
+function render() {
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
 
-  state.survived += dt;
-  state.speed = Math.min(CONFIG.maxSpeed, CONFIG.baseSpeed + state.survived * CONFIG.speedRamp + state.closeCallMultiplier * 0.4);
-  state.score += dt * 13 * state.closeCallMultiplier;
+  ctx.clearRect(0, 0, w, h);
+  drawGrid();
 
-  if (state.nearMissCooldown > 0) state.nearMissCooldown -= dt;
-  state.closeCallMultiplier = Math.max(1, state.closeCallMultiplier - dt * 0.08);
-  state.overloadTimer = Math.max(0, state.overloadTimer - dt);
-  state.overloadCooldown = Math.max(0, state.overloadCooldown - dt);
+  state.trails.forEach((trail) => {
+    ctx.fillStyle = trail.color;
+    ctx.shadowColor = trail.color;
+    ctx.shadowBlur = 12;
+    ctx.fillRect(trail.x - 2, trail.y - 2, 4, 4);
+  });
 
-  syncPlayer(dt);
-  updateBots(dt);
-  checkNearMissAndCollisions();
-  updateObstaclesAndPowerups(dt);
-  emitTrailParticles(dt);
-  updateParticles(dt);
-  updateCamera(dt);
+  state.powerups.forEach((p) => {
+    const color = p.type === 'phase' ? '#8dffef' : '#ff8ae4';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
+    ctx.stroke();
+  });
 
-  if (!state.player.alive) endGame();
+  state.entities.forEach((e) => {
+    if (!e.alive) return;
+    ctx.fillStyle = e.color;
+    ctx.shadowColor = e.color;
+    ctx.shadowBlur = 18;
+    ctx.fillRect(e.x - 6, e.y - 6, 12, 12);
+  });
+
+  state.particles.forEach((p) => {
+    ctx.globalAlpha = Math.max(0, p.life / 0.6);
+    ctx.fillStyle = p.color;
+    ctx.shadowColor = p.color;
+    ctx.shadowBlur = 8;
+    if (p.text) {
+      ctx.font = '12px monospace';
+      ctx.fillText(p.text, p.x, p.y);
+    } else {
+      ctx.fillRect(p.x, p.y, 2, 2);
+    }
+  });
+  ctx.globalAlpha = 1;
 }
 
 function updateUi() {
   ui.score.textContent = Math.floor(state.score).toString();
   ui.time.textContent = `${state.survived.toFixed(1)}s`;
-  ui.speed.textContent = `${(state.speed / CONFIG.baseSpeed).toFixed(2)}x`;
+  ui.speed.textContent = `${state.speedMultiplier.toFixed(2)}x`;
   ui.multiplier.textContent = `${state.closeCallMultiplier.toFixed(2)}x`;
-  ui.phaseStatus.textContent = String(state.phaseCharges);
+  ui.phaseStatus.textContent = state.phaseCharges.toString();
 
   if (state.overloadTimer > 0) {
     ui.overloadStatus.textContent = `Active ${state.overloadTimer.toFixed(1)}s`;
   } else if (state.overloadCooldown > 0) {
-    ui.overloadStatus.textContent = `Cooldown ${state.overloadCooldown.toFixed(1)}s`;
+    ui.overloadStatus.textContent = `Cooldown ${state.overloadCooldown.toFixed(1)}s (Space)`;
   } else {
-    ui.overloadStatus.textContent = 'Ready (Space / swipe down)';
+    ui.overloadStatus.textContent = 'Ready (Space)';
   }
 
   state.unlockedTrailScore = Math.max(state.unlockedTrailScore, state.score);
@@ -585,63 +484,74 @@ function updateUi() {
 
 function renderTrailOptions() {
   ui.trailOptions.innerHTML = '';
-
-  for (const style of TRAIL_STYLES) {
+  TRAIL_STYLES.forEach((style) => {
     const unlocked = state.unlockedTrailScore >= style.unlock;
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = unlocked ? style.label : `${style.label} (${style.unlock})`;
     button.disabled = !unlocked;
-
-    if (state.selectedTrail.id === style.id) button.classList.add('active');
-
+    if (state.selectedTrail.id === style.id) {
+      button.classList.add('active');
+    }
     button.addEventListener('click', () => {
       state.selectedTrail = style;
-      if (state.player?.mesh?.material) {
-        state.player.mesh.material.color.setHex(hexToInt(style.color));
-        state.player.mesh.material.emissive.setHex(hexToInt(style.color));
+      if (state.entities[0]) {
+        state.entities[0].color = style.color;
       }
       renderTrailOptions();
     });
-
     ui.trailOptions.appendChild(button);
-  }
+  });
 }
 
-function render() {
-  const pulse = 0.2 + Math.sin(state.survived * 2.8) * 0.05;
-  gfx.road.material.emissiveIntensity = pulse + (state.overloadTimer > 0 ? 0.25 : 0);
-  gfx.renderer.render(gfx.scene, gfx.camera);
-}
+function loop(timestamp) {
+  if (!state.running) return;
 
-function loop(ts) {
-  const dt = Math.min(0.033, ((ts - state.lastTime) || 16) / 1000);
-  state.lastTime = ts;
+  const dt = Math.min(0.033, (timestamp - state.lastTime) / 1000 || 0.016);
+  state.lastTime = timestamp;
 
-  if (state.running) {
-    updateGame(dt);
-    updateUi();
-    syncAudio();
+  state.survived += dt;
+  state.score += dt * 12 * state.closeCallMultiplier;
+
+  state.nextPowerup -= dt * 1000;
+  if (state.nextPowerup <= 0) {
+    spawnPowerup();
+    state.nextPowerup = CONFIG.powerupEveryMs;
   }
 
+  state.overloadTimer = Math.max(0, state.overloadTimer - dt);
+  state.overloadCooldown = Math.max(0, state.overloadCooldown - dt);
+
+  handlePowerupPickup();
+  awardNearMiss(dt);
+  updateEntities(dt);
+  updateParticles(dt);
   render();
-  requestAnimationFrame(loop);
-}
+  updateUi();
+  syncAudio();
 
-function startGame() {
-  requestFullscreenIfMobile();
-  resetGame();
-  state.running = true;
-  state.lastTime = performance.now();
-  ui.overlay.classList.add('hidden');
+  if (!state.entities[0].alive) {
+    endGame();
+    return;
+  }
+
+  requestAnimationFrame(loop);
 }
 
 function endGame() {
   state.running = false;
   ui.overlay.classList.remove('hidden');
   ui.overlayTitle.textContent = 'Run Ended';
-  ui.overlayText.textContent = `You lasted ${state.survived.toFixed(1)}s and scored ${Math.floor(state.score)}. Tap Try Again to restart instantly.`;
+  ui.overlayText.textContent = `You lasted ${state.survived.toFixed(1)}s with ${Math.floor(state.score)} points.`;
   ui.startBtn.textContent = 'Try Again';
+}
+
+function startGame() {
+  resetGame();
+  state.running = true;
+  state.lastTime = performance.now();
+  ui.overlay.classList.add('hidden');
+  requestAnimationFrame(loop);
 }
 
 function initAudio() {
@@ -653,7 +563,7 @@ function initAudio() {
 
   const bass = context.createOscillator();
   bass.type = 'sawtooth';
-  bass.frequency.value = 52;
+  bass.frequency.value = 55;
   const bassGain = context.createGain();
   bassGain.gain.value = 0.16;
   bass.connect(bassGain);
@@ -663,7 +573,9 @@ function initAudio() {
   audio.context = context;
   audio.master = master;
   audio.bass = bass;
+  audio.pulse = bassGain;
   audio.active = true;
+
   scheduleBeat();
 }
 
@@ -684,27 +596,25 @@ function pulseSynth(freq = 220, duration = 0.08) {
 
 function scheduleBeat() {
   if (!audio.active) return;
-  const tempo = 430 - Math.min(220, (state.speed / CONFIG.baseSpeed) * 85 + state.survived * 1.6);
-  pulseSynth(108 + (state.speed / CONFIG.baseSpeed) * 18, 0.12);
+  const tempo = 420 - Math.min(200, state.speedMultiplier * 70 + state.survived * 2);
+  pulseSynth(110 + state.speedMultiplier * 15, 0.12);
   if (audio.beatTimer) clearTimeout(audio.beatTimer);
-  audio.beatTimer = setTimeout(scheduleBeat, Math.max(135, tempo));
+  audio.beatTimer = setTimeout(scheduleBeat, Math.max(140, tempo));
 }
 
 function syncAudio() {
   if (!audio.context || !audio.active) return;
-  const speedFactor = state.speed / CONFIG.baseSpeed;
-  audio.master.gain.value = Math.min(0.24, 0.08 + speedFactor * 0.035);
-  audio.bass.frequency.value = 52 + speedFactor * 11;
+  const boost = Math.min(0.22, 0.08 + state.speedMultiplier * 0.03 + state.survived * 0.0005);
+  audio.master.gain.value = boost;
+  audio.bass.frequency.value = 55 + state.speedMultiplier * 9;
 }
 
-ui.startBtn.addEventListener('click', () => {
-  startGame();
-});
-
+ui.startBtn.addEventListener('click', startGame);
 ui.audioBtn.addEventListener('click', async () => {
   if (!audio.context) initAudio();
-  if (audio.context.state === 'suspended') await audio.context.resume();
-
+  if (audio.context.state === 'suspended') {
+    await audio.context.resume();
+  }
   audio.active = !audio.active;
   if (audio.active) {
     scheduleBeat();
@@ -715,15 +625,11 @@ ui.audioBtn.addEventListener('click', async () => {
   }
 });
 
-window.addEventListener('resize', resizeRenderer);
+window.addEventListener('resize', resizeCanvas);
 
-document.addEventListener('pointerdown', requestFullscreenIfMobile, { once: true });
-
-setupThree();
-if (state.renderDisabled) {
-  ui.overlayText.textContent = 'WebGL failed in this browser session. Gameplay still runs, but 3D rendering is unavailable here.';
-}
+resizeCanvas();
 setupControls();
 renderTrailOptions();
 resetGame();
-requestAnimationFrame(loop);
+render();
+updateUi();
