@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Neon Runner: Tron Survival</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <section class="hud">
+        <h1>Neon Runner</h1>
+        <div class="stats">
+          <span>Score: <strong id="score">0</strong></span>
+          <span>Time: <strong id="time">0.0s</strong></span>
+          <span>Speed: <strong id="speed">1.0x</strong></span>
+          <span>Close-Call: <strong id="multiplier">1.0x</strong></span>
+        </div>
+        <div class="status-row">
+          <span>Phase Shift: <strong id="phase-status">Ready</strong></span>
+          <span>System Overload: <strong id="overload-status">Ready</strong></span>
+          <button id="fullscreen-btn" type="button">Fullscreen</button>
+          <button id="audio-toggle" type="button">Start Music</button>
+        </div>
+        <div class="customization" id="trail-options"></div>
+      </section>
+
+      <section class="arena-wrap">
+        <canvas id="game" tabindex="0" aria-label="Neon Runner game canvas"></canvas>
+        <div class="overlay" id="overlay">
+          <h2 id="overlay-title">Left/Right Steering</h2>
+          <p id="overlay-text">
+            Tron arena survival. Use left/right controls to turn your bike relative to its current direction and avoid bot light walls.
+          </p>
+          <button id="start-btn" type="button">Start Run</button>
+        </div>
+      </section>
+
+      <section class="controls-help">
+        <p><strong>Desktop:</strong> Arrow Left/Right or A/D to turn. Space starts/tries again and can trigger overload.</p>
+        <p><strong>Phone:</strong> Swipe left or right only.</p>
+      </section>
+    </main>
+
+    <script>
+      (function () {
+        function loadScript(src) {
+          return new Promise(function (resolve, reject) {
+            var script = document.createElement('script');
+            script.src = src;
+            script.onload = resolve;
+            script.onerror = reject;
+            document.head.appendChild(script);
+          });
+        }
+
+        function startGameScript() {
+          var gameScript = document.createElement('script');
+          gameScript.src = 'game.js';
+          document.body.appendChild(gameScript);
+        }
+
+        loadScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r160/three.min.js')
+          .catch(function () {
+            return loadScript('https://unpkg.com/three@0.160.0/build/three.min.js');
+          })
+          .finally(startGameScript);
+      })();
+    </script>
+  </body>
+</html>
