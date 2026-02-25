@@ -1,6 +1,6 @@
 # Neon-Runner
 
-A Tron-inspired survival game rendered with Three.js + WebGL.
+A Tron-inspired survival game built with HTML5 canvas.
 
 ## Features
 - Arrow keys/WASD for desktop and swipe controls for mobile.
@@ -13,4 +13,4 @@ A Tron-inspired survival game rendered with Three.js + WebGL.
 - Dynamic synthwave-style generated audio that intensifies with speed.
 
 ## Run
-Serve the folder with any static server (recommended so the Three.js CDN script loads reliably).
+Open `index.html` directly or serve the folder with any static server.

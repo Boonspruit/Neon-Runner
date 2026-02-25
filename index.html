@@ -41,30 +41,6 @@
       </section>
     </main>
 
-    <script>
-      (function () {
-        function loadScript(src) {
-          return new Promise(function (resolve, reject) {
-            var script = document.createElement('script');
-            script.src = src;
-            script.onload = resolve;
-            script.onerror = reject;
-            document.head.appendChild(script);
-          });
-        }
-
-        function startGameScript() {
-          var gameScript = document.createElement('script');
-          gameScript.src = 'game.js';
-          document.body.appendChild(gameScript);
-        }
-
-        loadScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r160/three.min.js')
-          .catch(function () {
-            return loadScript('https://unpkg.com/three@0.160.0/build/three.min.js');
-          })
-          .finally(startGameScript);
-      })();
-    </script>
+    <script src="game.js"></script>
   </body>
 </html>
