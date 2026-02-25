@@ -15,6 +15,7 @@ const ui = {
   audioBtn: document.getElementById('audio-toggle'),
   fullscreenBtn: document.getElementById('fullscreen-btn'),
   trailOptions: document.getElementById('trail-options'),
+  bgm: document.getElementById('bgm'),
 };
 
 const DIR = [
@@ -27,22 +28,25 @@ const DIR = [
 const TRAIL_STYLES = [
   { id: 'cyan', label: 'Classic Cyan', unlock: 0, color: '#17f2ff', particle: 'spark' },
   { id: 'magenta', label: 'Magenta Surge', unlock: 120, color: '#ff2cc6', particle: 'spark' },
+  { id: 'lime', label: 'Lime Pulse', unlock: 190, color: '#a5ff32', particle: 'spark' },
   { id: 'amber', label: 'Amber Binary', unlock: 280, color: '#ffbb33', particle: 'binary' },
+  { id: 'sunset', label: 'Sunset Glide', unlock: 360, color: '#ff6b6b', particle: 'spark' },
   { id: 'void', label: 'Void Glitch', unlock: 460, color: '#9f7bff', particle: 'binary' },
+  { id: 'electric', label: 'Electric Mint', unlock: 620, color: '#4dffd8', particle: 'binary' },
 ];
 
 const CONFIG = {
-  fieldHalf: 115,
+  fieldHalf: 140,
   baseSpeed: 22,
   speedRamp: 0.85,
-  botCount: 4,
+  botCount: 7,
   trailSpacing: 1.04,
   maxTrailSegments: 12000,
   nearMissDist: 2.8,
   powerupSpawnMs: 5200,
 };
 
-const BOT_COLORS = ['#ff2cc6', '#ffa24d', '#79ff7a', '#7a8dff'];
+const BOT_COLORS = ['#ff2cc6', '#ffa24d', '#79ff7a', '#7a8dff', '#25f0ff', '#ff5a9f', '#ffd84e', '#c98dff'];
 
 const state = {
   running: false,
@@ -75,6 +79,8 @@ const audio = {
   active: false,
   stepTimer: null,
   step: 0,
+  bgmReady: false,
+  bgmEnabled: false,
 };
 
 const gfx = {
@@ -117,7 +123,7 @@ function setupThree() {
   gfx.scene.add(hemi, key);
 
   const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(300, 300),
+    new THREE.PlaneGeometry(360, 360),
     new THREE.MeshStandardMaterial({ color: 0x070b15, emissive: 0x071b30, emissiveIntensity: 0.34 })
   );
   floor.rotation.x = -Math.PI / 2;
@@ -125,7 +131,7 @@ function setupThree() {
   gfx.scene.add(floor);
   gfx.floor = floor;
 
-  const grid = new THREE.GridHelper(260, 130, 0x205f8f, 0x13344d);
+  const grid = new THREE.GridHelper(320, 160, 0x205f8f, 0x13344d);
   grid.position.y = -0.7;
   gfx.scene.add(grid);
 
@@ -184,11 +190,28 @@ function createEntity(isPlayer, color, x, z, dirIndex) {
   mesh.position.set(x, 0.1, z);
   mesh.rotation.y = dirIndex * (Math.PI / 2);
   gfx.scene.add(mesh);
-  return { id: state.nextEntityId++, isPlayer, color, x, z, dirIndex, alive: true, mesh, trailTick: 0, thinkTimer: randomIn(0.08, 0.22) };
+  return {
+    id: state.nextEntityId++,
+    isPlayer,
+    color,
+    x,
+    z,
+    dirIndex,
+    alive: true,
+    mesh,
+    trailTick: 0,
+    thinkTimer: randomIn(0.05, 0.16),
+    targetId: null,
+    pathMemory: [],
+  };
 }
 
 function createTrailPoint(entity) {
-  const mesh = new THREE.Mesh(gfx.trailGeo, neonMaterial(entity.color, 0.75));
+  const mat = neonMaterial(entity.color, 0.75);
+  mat.transparent = true;
+  mat.opacity = 1;
+  mat.depthWrite = false;
+  const mesh = new THREE.Mesh(gfx.trailGeo, mat);
   mesh.position.set(entity.x, 0.06, entity.z);
   gfx.scene.add(mesh);
   state.trails.push({ ownerId: entity.id, owner: entity.isPlayer ? 'player' : 'bot', x: entity.x, z: entity.z, bornAt: state.survived, mesh });
@@ -207,7 +230,7 @@ function spawnPowerup() {
   const color = type === 'phase' ? '#8dffef' : '#ff8ae4';
   const geometry = type === 'phase' ? new THREE.IcosahedronGeometry(0.95, 0) : new THREE.OctahedronGeometry(1.05, 0);
   const mesh = new THREE.Mesh(geometry, neonMaterial(color, 1.1));
-  mesh.position.set(randomIn(-82, 82), 1.6, randomIn(-82, 82));
+  mesh.position.set(randomIn(-118, 118), 1.6, randomIn(-118, 118));
   gfx.scene.add(mesh);
   state.powerups.push({ type, x: mesh.position.x, z: mesh.position.z, ttl: 15, mesh });
 }
@@ -229,10 +252,21 @@ function resetGame() {
   });
 
   state.entities.push(createEntity(true, state.selectedTrail.color, 0, 0, 0));
-  state.entities.push(createEntity(false, BOT_COLORS[0], -38, -38, 1));
-  state.entities.push(createEntity(false, BOT_COLORS[1], 38, 38, 3));
-  state.entities.push(createEntity(false, BOT_COLORS[2], -38, 38, 2));
-  state.entities.push(createEntity(false, BOT_COLORS[3], 38, -38, 0));
+
+  const botSpawns = [
+    [-94, -94, 1],
+    [94, 94, 3],
+    [-94, 94, 2],
+    [94, -94, 0],
+    [0, -108, 1],
+    [108, 0, 2],
+    [-108, 0, 0],
+  ];
+
+  for (let i = 0; i < CONFIG.botCount; i += 1) {
+    const [x, z, d] = botSpawns[i % botSpawns.length];
+    state.entities.push(createEntity(false, BOT_COLORS[i % BOT_COLORS.length], x, z, d));
+  }
 
   updateUi();
   render();
@@ -240,6 +274,16 @@ function resetGame() {
 
 function player() { return state.entities[0]; }
 function entityDir(e) { return DIR[e.dirIndex]; }
+
+function trailFadeAge() {
+  return Math.max(3.2, 14 - state.survived * 0.22);
+}
+
+function trailLife(t) {
+  const life = 1 - (state.survived - t.bornAt) / trailFadeAge();
+  return Math.max(0, Math.min(1, life));
+}
+
 function turnLeft(e) { e.dirIndex = (e.dirIndex + 3) % 4; }
 function turnRight(e) { e.dirIndex = (e.dirIndex + 1) % 4; }
 
@@ -276,14 +320,26 @@ function setupControls() {
 
 
 function selectBotTarget(bot) {
-  const opponents = state.entities.filter((e) => e.alive && e.id !== bot.id);
-  opponents.sort((a, b) => {
-    const ap = a.isPlayer ? 0 : 1;
-    const bp = b.isPlayer ? 0 : 1;
-    if (ap !== bp) return ap - bp;
-    return distSq2D(bot, a) - distSq2D(bot, b);
+  const alive = state.entities.filter((e) => e.alive && e.id !== bot.id);
+  if (!alive.length) return player();
+
+  if (bot.targetId) {
+    const keep = alive.find((e) => e.id === bot.targetId);
+    if (keep) return keep;
+  }
+
+  alive.sort((a, b) => {
+    const apri = a.isPlayer ? 0 : 1;
+    const bpri = b.isPlayer ? 0 : 1;
+    if (apri !== bpri) return apri - bpri;
+
+    const ad = distSq2D(bot, a);
+    const bd = distSq2D(bot, b);
+    return ad - bd;
   });
-  return opponents[0] || player();
+
+  bot.targetId = alive[0].id;
+  return alive[0];
 }
 
 function wallInterceptScore(bot, optDir, target) {
@@ -300,41 +356,158 @@ function wallInterceptScore(bot, optDir, target) {
 function estimateDanger(x, z, dirIndex, entityId) {
   const d = DIR[dirIndex];
   let penalty = 0;
-  for (let step = 1; step <= 8; step += 1) {
+  for (let step = 1; step <= 9; step += 1) {
     const nx = x + d.x * step * 2;
     const nz = z + d.z * step * 2;
-    if (Math.abs(nx) > CONFIG.fieldHalf - 2 || Math.abs(nz) > CONFIG.fieldHalf - 2) penalty += 22;
+    if (Math.abs(nx) > CONFIG.fieldHalf - 2 || Math.abs(nz) > CONFIG.fieldHalf - 2) penalty += 24;
     for (const t of state.trails) {
-      const age = state.survived - t.bornAt;
-      if (t.ownerId === entityId && age < 1.4) continue;
+      if (t.ownerId === entityId && state.survived - t.bornAt < 1.3) continue;
+      const life = trailLife(t);
+      if (life <= 0.15) continue;
       const dd = (nx - t.x) ** 2 + (nz - t.z) ** 2;
-      if (dd < 4) penalty += t.ownerId === entityId ? 24 : 15;
+      const radius = 0.6 + life * 0.9;
+      if (dd < radius * radius) penalty += t.ownerId === entityId ? 28 : 16;
     }
   }
   return penalty;
 }
 
+function pointBlocked(x, z, entityId) {
+  if (Math.abs(x) >= CONFIG.fieldHalf - 1 || Math.abs(z) >= CONFIG.fieldHalf - 1) return true
+  for (const t of state.trails) {
+    if (t.ownerId === entityId && state.survived - t.bornAt < 1.2) continue;
+    const life = trailLife(t);
+    if (life <= 0.18) continue;
+    const r = 0.55 + life * 0.95;
+    if ((x - t.x) ** 2 + (z - t.z) ** 2 < r * r) return true;
+  }
+  return false;
+}
+
+function projectedFreeSpace(bot, optDir) {
+  const startDir = DIR[optDir];
+  const start = { x: bot.x + startDir.x * 5, z: bot.z + startDir.z * 5 };
+  const step = 3;
+  const limit = 150;
+  const queue = [start];
+  const visited = new Set();
+  let count = 0;
+
+  while (queue.length && count < limit) {
+    const n = queue.shift();
+    const qx = Math.round(n.x / step);
+    const qz = Math.round(n.z / step);
+    const key = `${qx},${qz}`;
+    if (visited.has(key)) continue;
+    visited.add(key);
+
+    const px = qx * step;
+    const pz = qz * step;
+    if (Math.abs(px - bot.x) > 48 || Math.abs(pz - bot.z) > 48) continue;
+    if (pointBlocked(px, pz, bot.id)) continue;
+
+    count += 1;
+    queue.push({ x: px + step, z: pz });
+    queue.push({ x: px - step, z: pz });
+    queue.push({ x: px, z: pz + step });
+    queue.push({ x: px, z: pz - step });
+  }
+
+  return count;
+}
+
+function loopPenalty(bot, opt) {
+  const d = DIR[opt];
+  const nx = Math.round((bot.x + d.x * 4) / 2);
+  const nz = Math.round((bot.z + d.z * 4) / 2);
+  const k = `${nx},${nz}`;
+  let hits = 0;
+  for (const key of bot.pathMemory) {
+    if (key === k) hits += 1;
+  }
+  return hits * 35;
+}
+
+function optionTowardTarget(bot, target) {
+  const dx = target.x - bot.x;
+  const dz = target.z - bot.z;
+  if (Math.abs(dx) > Math.abs(dz)) return dx > 0 ? 1 : 3;
+  return dz > 0 ? 2 : 0;
+}
+
+
+function willHitOwnTrailSoon(bot, dirIndex, horizon = 18) {
+  const d = DIR[dirIndex];
+  const speed = (CONFIG.baseSpeed + state.survived * CONFIG.speedRamp) * state.speedMul;
+  const stride = 1.6;
+  const steps = Math.max(6, Math.floor(horizon / stride));
+
+  for (let i = 1; i <= steps; i += 1) {
+    const nx = bot.x + d.x * i * stride;
+    const nz = bot.z + d.z * i * stride;
+
+    if (Math.abs(nx) >= CONFIG.fieldHalf - 1.4 || Math.abs(nz) >= CONFIG.fieldHalf - 1.4) return true;
+
+    for (const t of state.trails) {
+      if (t.ownerId !== bot.id) continue;
+      if (state.survived - t.bornAt < 1.1) continue;
+      const life = trailLife(t);
+      if (life <= 0.12) continue;
+      const r = 0.35 + life * 0.9;
+      if ((nx - t.x) ** 2 + (nz - t.z) ** 2 < r * r) return true;
+    }
+  }
+
+  return false;
+}
+
+function safestTurn(bot) {
+  const options = [(bot.dirIndex + 3) % 4, (bot.dirIndex + 1) % 4, bot.dirIndex];
+  let best = options[0];
+  let bestScore = -Infinity;
+
+  for (const opt of options) {
+    const ownRisk = willHitOwnTrailSoon(bot, opt, 20) ? 1 : 0;
+    const score = projectedFreeSpace(bot, opt) - estimateDanger(bot.x, bot.z, opt, bot.id) - ownRisk * 200;
+    if (score > bestScore) {
+      bestScore = score;
+      best = opt;
+    }
+  }
+
+  return best;
+}
+
 function aiTurn(bot, dt) {
   bot.thinkTimer -= dt;
   if (bot.thinkTimer > 0) return;
-  bot.thinkTimer = randomIn(0.08, 0.2);
+  bot.thinkTimer = randomIn(0.04, 0.13);
 
   const options = [bot.dirIndex, (bot.dirIndex + 3) % 4, (bot.dirIndex + 1) % 4];
   const target = selectBotTarget(bot);
   const targetDir = entityDir(target);
+  const preferred = optionTowardTarget(bot, target);
+
   let best = options[0];
   let bestScore = -Infinity;
 
   for (const opt of options) {
     const d = DIR[opt];
     const probe = { x: bot.x + d.x * 10, z: bot.z + d.z * 10 };
-    let score = randomIn(0, 5);
 
+    const ownTrap = willHitOwnTrailSoon(bot, opt, 22) ? 1 : 0;
+
+    let score = 0;
     score -= estimateDanger(bot.x, bot.z, opt, bot.id);
 
     const tFuture = { x: target.x + targetDir.x * 14, z: target.z + targetDir.z * 14 };
     score += Math.max(0, 120 - distSq2D(probe, tFuture));
-    score += wallInterceptScore(bot, opt, target);
+    score += wallInterceptScore(bot, opt, target) * 1.3;
+    score += projectedFreeSpace(bot, opt) * 0.95;
+
+    if (opt === preferred) score += 24;
+    score -= loopPenalty(bot, opt);
+    score -= ownTrap * 260;
 
     if (score > bestScore) {
       bestScore = score;
@@ -343,13 +516,21 @@ function aiTurn(bot, dt) {
   }
 
   bot.dirIndex = best;
+
+  // Emergency correction right after choosing: never keep a heading that immediately self-traps.
+  if (willHitOwnTrailSoon(bot, bot.dirIndex, 14)) {
+    bot.dirIndex = safestTurn(bot);
+  }
 }
 
 function checkCollision(entity) {
   if (Math.abs(entity.x) >= CONFIG.fieldHalf || Math.abs(entity.z) >= CONFIG.fieldHalf) return true;
   for (const t of state.trails) {
     if (t.ownerId === entity.id && state.survived - t.bornAt < 0.22) continue;
-    if (distSq2D(entity, t) < 0.8) return true;
+    const life = trailLife(t);
+    if (life <= 0.12) continue;
+    const radius = 0.3 + life * 0.9;
+    if (distSq2D(entity, t) < radius * radius) return true;
   }
   return false;
 }
@@ -371,6 +552,11 @@ function updateEntities(dt) {
     if (!e.isPlayer) aiTurn(e, dt * overloadFactor);
 
     const speed = e.isPlayer ? worldSpeed : worldSpeed * randomIn(0.9, 1.03) * overloadFactor;
+
+    if (!e.isPlayer && willHitOwnTrailSoon(e, e.dirIndex, 10)) {
+      e.dirIndex = safestTurn(e);
+    }
+
     const d = entityDir(e);
     e.x += d.x * speed * dt;
     e.z += d.z * speed * dt;
@@ -398,21 +584,26 @@ function updateEntities(dt) {
 
     e.mesh.position.set(e.x, 0.1, e.z);
     e.mesh.rotation.y = e.dirIndex * (Math.PI / 2);
+
+    if (!e.isPlayer) {
+      const memoryKey = `${Math.round(e.x / 2)},${Math.round(e.z / 2)}`;
+      e.pathMemory.push(memoryKey);
+      if (e.pathMemory.length > 40) e.pathMemory.shift();
+    }
   }
 
-  const fadeAge = Math.max(4.5, 18 - state.survived * 0.18);
+  const fadeAge = trailFadeAge();
   state.trails = state.trails.filter((t) => {
     const age = state.survived - t.bornAt;
-    const life = 1 - age / fadeAge;
-    const opacity = Math.max(0, Math.min(1, life));
+    const life = trailLife(t);
+    const easedLife = Math.max(0, Math.min(1, life * life * (3 - 2 * life)));
 
     if (t.mesh?.material) {
-      t.mesh.material.transparent = true;
-      t.mesh.material.opacity = opacity;
-      t.mesh.material.emissiveIntensity = 0.2 + opacity * 0.6;
+      t.mesh.material.emissiveIntensity = 0.08 + easedLife * 0.82;
+      t.mesh.material.opacity = Math.max(0, easedLife);
     }
 
-    if (age > fadeAge) {
+    if (age > fadeAge || life <= 0.003) {
       gfx.scene.remove(t.mesh);
       return false;
     }
@@ -678,6 +869,18 @@ function scheduleSynthwaveStep() {
   audio.stepTimer = setTimeout(scheduleSynthwaveStep, stepMs);
 }
 
+function prepareBgm() {
+  if (!ui.bgm) return;
+  ui.bgm.volume = 0.28;
+  ui.bgm.playbackRate = 1;
+  ui.bgm.addEventListener('canplay', () => {
+    audio.bgmReady = true;
+  }, { once: true });
+  ui.bgm.addEventListener('error', () => {
+    audio.bgmReady = false;
+  });
+}
+
 function initMusic() {
   if (audio.context) return;
   const context = new AudioContext();
@@ -688,12 +891,26 @@ function initMusic() {
   audio.master = master;
   audio.active = true;
   audio.step = 0;
-  scheduleSynthwaveStep();
+
+  if (audio.bgmReady) {
+    ui.bgm.play().then(() => {
+      audio.bgmEnabled = true;
+    }).catch(() => {
+      audio.bgmEnabled = false;
+      scheduleSynthwaveStep();
+    });
+  } else {
+    scheduleSynthwaveStep();
+  }
 }
 
 function syncMusic() {
   if (!audio.context || !audio.active) return;
   audio.master.gain.value = Math.min(0.3, 0.1 + state.speedMul * 0.05);
+  if (audio.bgmEnabled && ui.bgm) {
+    ui.bgm.playbackRate = Math.min(1.2, 0.98 + state.speedMul * 0.08);
+    ui.bgm.volume = Math.min(0.45, 0.22 + state.speedMul * 0.08);
+  }
 }
 
 ui.startBtn.addEventListener('click', startGame);
@@ -703,16 +920,23 @@ ui.audioBtn.addEventListener('click', async () => {
   if (audio.context.state === 'suspended') await audio.context.resume();
   audio.active = !audio.active;
   if (audio.active) {
-    scheduleSynthwaveStep();
+    if (audio.bgmReady) {
+      ui.bgm.play().then(() => { audio.bgmEnabled = true; }).catch(() => { audio.bgmEnabled = false; });
+    } else {
+      scheduleSynthwaveStep();
+    }
     ui.audioBtn.textContent = 'Mute Music';
   } else {
     if (audio.stepTimer) clearTimeout(audio.stepTimer);
+    if (ui.bgm) ui.bgm.pause();
+    audio.bgmEnabled = false;
     ui.audioBtn.textContent = 'Start Music';
   }
 });
 
 window.addEventListener('resize', resizeRenderer);
 document.addEventListener('pointerdown', requestFullscreenIfMobile, { once: true });
+prepareBgm();
 
 if (typeof window.THREE === 'undefined') {
   ui.overlayTitle.textContent = 'Three.js failed to load';
