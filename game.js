@@ -1,4 +1,5 @@
 const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
 
 const ui = {
   score: document.getElementById('score'),
@@ -16,13 +17,11 @@ const ui = {
 };
 
 const CONFIG = {
-  worldWidth: 240,
-  worldHeight: 140,
   botCount: 4,
-  segmentGap: 1.8,
-  baseSpeed: 28,
-  speedRamp: 0.65,
-  nearMissDistance: 5,
+  segmentSize: 5,
+  baseSpeed: 150,
+  speedRamp: 2.8,
+  nearMissDistance: 16,
   powerupEveryMs: 5200,
 };
 
@@ -32,8 +31,6 @@ const TRAIL_STYLES = [
   { id: 'amber', label: 'Amber Binary', unlock: 180, color: '#ffbb33', particle: 'binary' },
   { id: 'void', label: 'Void Glitch', unlock: 320, color: '#9f7bff', particle: 'binary' },
 ];
-
-const BOT_COLORS = ['#ff2cc6', '#ff7c4d', '#54ff8c', '#8b7bff'];
 
 const state = {
   running: false,
@@ -48,37 +45,28 @@ const state = {
   overloadCooldown: 0,
   powerups: [],
   nextPowerup: 0,
-  trailSegments: [],
+  trails: [],
   particles: [],
   entities: [],
   nextEntityId: 1,
   selectedTrail: TRAIL_STYLES[0],
   unlockedTrailScore: 0,
-  spawnGrace: 0,
 };
 
 const audio = {
   context: null,
   master: null,
   bass: null,
+  pulse: null,
   beatTimer: null,
   active: false,
 };
 
-const gfx = {
-  renderer: null,
-  scene: null,
-  camera: null,
-  arena: null,
-  entityGeom: null,
-  trailGeom: null,
-  sparkGeom: null,
-  powerGeom: null,
-  floor: null,
-};
-
-function hexToInt(hex) {
-  return Number.parseInt(hex.replace('#', '0x'), 16);
+function resizeCanvas() {
+  const bounds = canvas.getBoundingClientRect();
+  canvas.width = Math.floor(bounds.width * window.devicePixelRatio);
+  canvas.height = Math.floor(bounds.height * window.devicePixelRatio);
+  ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
 }
 
 function randomIn(min, max) {
@@ -98,227 +86,48 @@ function cloneDir(dir) {
   return { x: dir.x, y: dir.y };
 }
 
-function isOpposite(a, b) {
-  return a.x + b.x === 0 && a.y + b.y === 0;
-}
-
-function worldBounds() {
-  const halfW = CONFIG.worldWidth / 2;
-  const halfH = CONFIG.worldHeight / 2;
+function createEntity(isPlayer, color) {
+  const pad = 80;
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
   return {
-    minX: -halfW,
-    maxX: halfW,
-    minY: -halfH,
-    maxY: halfH,
-  };
-}
-
-function distSq(a, b) {
-  const dx = a.x - b.x;
-  const dy = a.y - b.y;
-  return dx * dx + dy * dy;
-}
-
-function createNeonMaterial(color) {
-  return new THREE.MeshStandardMaterial({
-    color: hexToInt(color),
-    emissive: hexToInt(color),
-    emissiveIntensity: 0.85,
-    metalness: 0.2,
-    roughness: 0.4,
-  });
-}
-
-function setupThree() {
-  gfx.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-  gfx.renderer.setPixelRatio(window.devicePixelRatio || 1);
-  gfx.renderer.outputColorSpace = THREE.SRGBColorSpace;
-
-  gfx.scene = new THREE.Scene();
-  gfx.scene.background = new THREE.Color(0x05030b);
-
-  const ambient = new THREE.AmbientLight(0x5577aa, 0.6);
-  const key = new THREE.DirectionalLight(0x66d8ff, 0.95);
-  key.position.set(0, 40, 30);
-
-  gfx.scene.add(ambient, key);
-
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(CONFIG.worldWidth + 8, CONFIG.worldHeight + 8),
-    new THREE.MeshStandardMaterial({ color: 0x090d18, roughness: 0.95, metalness: 0.05 })
-  );
-  floor.rotation.x = -Math.PI / 2;
-  floor.position.y = -0.8;
-  gfx.scene.add(floor);
-  gfx.floor = floor;
-
-  const grid = new THREE.GridHelper(CONFIG.worldWidth + 8, 50, 0x1b6ea8, 0x103754);
-  grid.position.y = -0.78;
-  gfx.scene.add(grid);
-
-  const box = worldBounds();
-  const boundaryPoints = [
-    new THREE.Vector3(box.minX, 0, box.minY),
-    new THREE.Vector3(box.maxX, 0, box.minY),
-    new THREE.Vector3(box.maxX, 0, box.maxY),
-    new THREE.Vector3(box.minX, 0, box.maxY),
-    new THREE.Vector3(box.minX, 0, box.minY),
-  ];
-  const boundaryGeom = new THREE.BufferGeometry().setFromPoints(boundaryPoints);
-  const boundary = new THREE.Line(
-    boundaryGeom,
-    new THREE.LineBasicMaterial({ color: 0x17f2ff })
-  );
-  boundary.position.y = 0.02;
-  gfx.scene.add(boundary);
-
-  gfx.entityGeom = new THREE.BoxGeometry(2.1, 1, 2.1);
-  gfx.trailGeom = new THREE.BoxGeometry(1.4, 0.5, 1.4);
-  gfx.sparkGeom = new THREE.SphereGeometry(0.35, 8, 8);
-  gfx.powerGeom = new THREE.TorusGeometry(1.1, 0.25, 12, 20);
-
-  resizeRenderer();
-}
-
-function resizeRenderer() {
-  const width = canvas.clientWidth;
-  const height = canvas.clientHeight;
-  const aspect = width / Math.max(height, 1);
-  const viewSize = CONFIG.worldHeight;
-
-  if (!gfx.camera) {
-    gfx.camera = new THREE.OrthographicCamera();
-    gfx.camera.position.set(0, 115, 0);
-    gfx.camera.up.set(0, 0, -1);
-    gfx.camera.lookAt(0, 0, 0);
-  }
-
-  gfx.camera.left = (-viewSize * aspect) / 2;
-  gfx.camera.right = (viewSize * aspect) / 2;
-  gfx.camera.top = viewSize / 2;
-  gfx.camera.bottom = -viewSize / 2;
-  gfx.camera.near = 1;
-  gfx.camera.far = 400;
-  gfx.camera.updateProjectionMatrix();
-
-  gfx.renderer.setSize(width, height, false);
-}
-
-function cleanupObjects() {
-  for (const seg of state.trailSegments) {
-    gfx.scene.remove(seg.mesh);
-  }
-  for (const p of state.particles) {
-    gfx.scene.remove(p.mesh);
-  }
-  for (const p of state.powerups) {
-    gfx.scene.remove(p.mesh);
-  }
-  for (const e of state.entities) {
-    if (e.mesh) gfx.scene.remove(e.mesh);
-  }
-}
-
-function createEntity(isPlayer, color, preset = null) {
-  const box = worldBounds();
-  const pad = 15;
-  const material = createNeonMaterial(color);
-  const mesh = new THREE.Mesh(gfx.entityGeom, material);
-  mesh.castShadow = false;
-  mesh.receiveShadow = false;
-  gfx.scene.add(mesh);
-
-  const entity = {
     id: state.nextEntityId++,
     isPlayer,
     color,
-    x: preset?.x ?? randomIn(box.minX + pad, box.maxX - pad),
-    y: preset?.y ?? randomIn(box.minY + pad, box.maxY - pad),
-    dir: preset?.dir ?? randomDir(),
+    x: randomIn(pad, w - pad),
+    y: randomIn(pad, h - pad),
+    dir: randomDir(),
     alive: true,
     thinkTime: randomIn(0.1, 0.4),
     trailEvery: 0,
-    mesh,
-    material,
   };
-  syncEntityMesh(entity);
-  return entity;
 }
 
-function syncEntityMesh(entity) {
-  entity.mesh.position.set(entity.x, 0.65, entity.y);
-  const angle = Math.atan2(entity.dir.y, entity.dir.x);
-  entity.mesh.rotation.y = -angle + Math.PI / 2;
-}
+function resetGame() {
+  state.score = 0;
+  state.survived = 0;
+  state.speedMultiplier = 1;
+  state.closeCallMultiplier = 1;
+  state.nearMissCooldown = 0;
+  state.phaseCharges = 0;
+  state.overloadTimer = 0;
+  state.overloadCooldown = 0;
+  state.powerups = [];
+  state.nextPowerup = CONFIG.powerupEveryMs;
+  state.trails = [];
+  state.particles = [];
 
-function spawnTrailPoint(entity) {
-  const material = createNeonMaterial(entity.color);
-  material.emissiveIntensity = 0.7;
-  const mesh = new THREE.Mesh(gfx.trailGeom, material);
-  mesh.position.set(entity.x, 0.26, entity.y);
-  gfx.scene.add(mesh);
-
-  state.trailSegments.push({
-    x: entity.x,
-    y: entity.y,
-    owner: entity.isPlayer ? 'player' : 'bot',
-    ownerId: entity.id,
-    bornAt: state.survived,
-    mesh,
-  });
-
-  const style = entity.isPlayer ? state.selectedTrail : { particle: 'spark', color: entity.color };
-  if (Math.random() < 0.35) {
-    const pm = new THREE.Mesh(
-      gfx.sparkGeom,
-      new THREE.MeshBasicMaterial({ color: hexToInt(style.color), transparent: true, opacity: 0.95 })
-    );
-    pm.position.set(entity.x, 0.9, entity.y);
-    gfx.scene.add(pm);
-    state.particles.push({
-      x: entity.x,
-      y: entity.y,
-      vy: randomIn(0.15, 0.4),
-      life: 0.7,
-      binary: style.particle === 'binary',
-      mesh: pm,
-    });
+  state.nextEntityId = 1;
+  state.entities = [createEntity(true, state.selectedTrail.color)];
+  for (let i = 0; i < CONFIG.botCount; i += 1) {
+    const botColors = ['#ff2cc6', '#ff7c4d', '#54ff8c', '#8b7bff'];
+    const bot = createEntity(false, botColors[i % botColors.length]);
+    state.entities.push(bot);
   }
 }
 
-function spawnPowerup() {
-  const box = worldBounds();
-  const type = Math.random() > 0.5 ? 'phase' : 'overload';
-  const color = type === 'phase' ? '#8dffef' : '#ff8ae4';
-  const mesh = new THREE.Mesh(gfx.powerGeom, createNeonMaterial(color));
-  mesh.rotation.x = Math.PI / 2;
-  mesh.position.set(randomIn(box.minX + 8, box.maxX - 8), 0.7, randomIn(box.minY + 8, box.maxY - 8));
-  gfx.scene.add(mesh);
-
-  state.powerups.push({
-    type,
-    x: mesh.position.x,
-    y: mesh.position.z,
-    ttl: 10,
-    mesh,
-  });
-}
-
-function detectCollision(entity) {
-  const box = worldBounds();
-  const margin = 1.5;
-  if (entity.isPlayer && state.spawnGrace > 0) return false;
-
-  if (entity.x < box.minX + margin || entity.x > box.maxX - margin || entity.y < box.minY + margin || entity.y > box.maxY - margin) {
-    return true;
-  }
-
-  for (const segment of state.trailSegments) {
-    if (segment.ownerId === entity.id && state.survived - segment.bornAt < 0.2) continue;
-    if (distSq(entity, segment) < 1.2) return true;
-  }
-
-  return false;
+function isOpposite(a, b) {
+  return a.x + b.x === 0 && a.y + b.y === 0;
 }
 
 function setPlayerDirection(target) {
@@ -326,16 +135,20 @@ function setPlayerDirection(target) {
   if (!player?.alive) return;
   if (!isOpposite(player.dir, target)) {
     player.dir = target;
-    syncEntityMesh(player);
   }
 }
 
 function setupControls() {
   window.addEventListener('keydown', (event) => {
     const map = {
-      ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 },
-      ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 },
-      w: { x: 0, y: -1 }, s: { x: 0, y: 1 }, a: { x: -1, y: 0 }, d: { x: 1, y: 0 },
+      ArrowUp: { x: 0, y: -1 },
+      ArrowDown: { x: 0, y: 1 },
+      ArrowLeft: { x: -1, y: 0 },
+      ArrowRight: { x: 1, y: 0 },
+      w: { x: 0, y: -1 },
+      s: { x: 0, y: 1 },
+      a: { x: -1, y: 0 },
+      d: { x: 1, y: 0 },
     };
 
     if (map[event.key]) {
@@ -343,7 +156,7 @@ function setupControls() {
       setPlayerDirection(map[event.key]);
     }
 
-    if (event.key === ' ') {
+    if (event.key.toLowerCase() === ' ') {
       event.preventDefault();
       activateOverload();
     }
@@ -371,46 +184,49 @@ function setupControls() {
   }, { passive: true });
 }
 
-function aiTurn(bot, dt) {
-  bot.thinkTime -= dt;
-  if (bot.thinkTime > 0) return;
-  bot.thinkTime = randomIn(0.06, 0.22);
+function addTrailPoint(entity) {
+  state.trails.push({
+    x: entity.x,
+    y: entity.y,
+    color: entity.color,
+    owner: entity.isPlayer ? 'player' : 'bot',
+    ownerId: entity.id,
+    bornAt: state.survived,
+  });
 
-  const options = [
-    cloneDir(bot.dir),
-    { x: bot.dir.y, y: -bot.dir.x },
-    { x: -bot.dir.y, y: bot.dir.x },
-  ];
+  const style = entity.isPlayer ? state.selectedTrail : { particle: 'spark', color: entity.color };
+  if (Math.random() < 0.38) {
+    state.particles.push({
+      x: entity.x,
+      y: entity.y,
+      life: 0.6,
+      text: style.particle === 'binary' ? (Math.random() > 0.5 ? '0' : '1') : null,
+      color: style.color,
+    });
+  }
+}
 
-  let best = options[0];
-  let bestScore = -Infinity;
-  const bounds = worldBounds();
+function distSq(a, b) {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return dx * dx + dy * dy;
+}
 
-  for (const dir of options) {
-    if (isOpposite(bot.dir, dir)) continue;
-    const probe = { x: bot.x + dir.x * 8, y: bot.y + dir.y * 8 };
-    let score = randomIn(0, 8);
-
-    if (probe.x < bounds.minX + 3 || probe.x > bounds.maxX - 3 || probe.y < bounds.minY + 3 || probe.y > bounds.maxY - 3) {
-      score -= 120;
-    }
-
-    for (const segment of state.trailSegments) {
-      if (distSq(probe, segment) < 20) score -= 55;
-    }
-
-    const player = state.entities[0];
-    const pressure = { x: player.x + player.dir.x * 12, y: player.y + player.dir.y * 12 };
-    score += Math.max(0, 80 - distSq(probe, pressure));
-
-    if (score > bestScore) {
-      best = dir;
-      bestScore = score;
-    }
+function detectCollision(entity) {
+  const margin = 6;
+  if (entity.x < margin || entity.y < margin || entity.x > canvas.clientWidth - margin || entity.y > canvas.clientHeight - margin) {
+    return true;
   }
 
-  bot.dir = best;
-  syncEntityMesh(bot);
+  for (let i = 0; i < state.trails.length; i += 1) {
+    const t = state.trails[i];
+    if (t.ownerId === entity.id && state.survived - t.bornAt < 0.22) continue;
+    if (distSq(entity, t) < 18) {
+    if (distSq(entity, t) < 32) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function awardNearMiss(dt) {
@@ -420,13 +236,14 @@ function awardNearMiss(dt) {
   }
 
   const player = state.entities[0];
-  const nearSq = CONFIG.nearMissDistance * CONFIG.nearMissDistance;
   let close = false;
+  const nearSq = CONFIG.nearMissDistance * CONFIG.nearMissDistance;
 
-  for (const segment of state.trailSegments) {
-    if (segment.owner === 'player') continue;
-    const d = distSq(player, segment);
-    if (d < nearSq && d > 2.3) {
+  for (let i = 0; i < state.trails.length; i += 1) {
+    const trail = state.trails[i];
+    if (trail.owner === 'player') continue;
+    const d = distSq(player, trail);
+    if (d < nearSq && d > 48) {
       close = true;
       break;
     }
@@ -434,13 +251,23 @@ function awardNearMiss(dt) {
 
   if (close) {
     state.closeCallMultiplier = Math.min(5, state.closeCallMultiplier + 0.25);
-    state.speedMultiplier = Math.min(2.8, state.speedMultiplier + 0.025);
+    state.speedMultiplier = Math.min(2.8, state.speedMultiplier + 0.03);
     state.score += 8 * state.closeCallMultiplier;
     state.nearMissCooldown = 0.35;
-    pulseSynth(330, 0.05);
+    pulseSynth(320, 0.05);
   } else {
     state.closeCallMultiplier = Math.max(1, state.closeCallMultiplier - dt * 0.12);
   }
+}
+
+function spawnPowerup() {
+  const types = ['phase', 'overload'];
+  state.powerups.push({
+    type: types[Math.floor(Math.random() * types.length)],
+    x: randomIn(40, canvas.clientWidth - 40),
+    y: randomIn(40, canvas.clientHeight - 40),
+    ttl: 10,
+  });
 }
 
 function activateOverload() {
@@ -450,17 +277,12 @@ function activateOverload() {
   pulseSynth(180, 0.1);
 }
 
-function handlePowerupPickup(dt) {
+function handlePowerupPickup() {
   const player = state.entities[0];
   state.powerups = state.powerups.filter((p) => {
-    p.ttl -= dt;
-    p.mesh.rotation.z += dt * 1.7;
-    if (p.ttl <= 0) {
-      gfx.scene.remove(p.mesh);
-      return false;
-    }
-
-    if (distSq(player, p) < 9) {
+    p.ttl -= 1 / 60;
+    if (p.ttl <= 0) return false;
+    if (distSq(player, p) < 360) {
       if (p.type === 'phase') {
         state.phaseCharges += 1;
       } else {
@@ -468,73 +290,177 @@ function handlePowerupPickup(dt) {
         state.overloadTimer = 2.6;
       }
       state.score += 40;
-      pulseSynth(470, 0.08);
-      gfx.scene.remove(p.mesh);
+      pulseSynth(480, 0.08);
       return false;
     }
-
     return true;
   });
+}
+
+function aiTurn(bot, dt) {
+  bot.thinkTime -= dt;
+  if (bot.thinkTime > 0) return;
+  bot.thinkTime = randomIn(0.08, 0.3);
+
+  const options = [
+    cloneDir(bot.dir),
+    { x: bot.dir.y, y: -bot.dir.x },
+    { x: -bot.dir.y, y: bot.dir.x },
+  ];
+
+  let best = options[0];
+  let bestScore = -Infinity;
+
+  options.forEach((dir) => {
+    if (isOpposite(bot.dir, dir)) return;
+    const probe = { x: bot.x + dir.x * 28, y: bot.y + dir.y * 28 };
+    let score = randomIn(0, 10);
+
+    if (probe.x < 20 || probe.y < 20 || probe.x > canvas.clientWidth - 20 || probe.y > canvas.clientHeight - 20) {
+      score -= 100;
+    }
+
+    for (let i = 0; i < state.trails.length; i += 1) {
+      if (distSq(probe, state.trails[i]) < 540) {
+        score -= 60;
+      }
+    }
+
+    const player = state.entities[0];
+    const pressureSpot = { x: player.x + player.dir.x * 40, y: player.y + player.dir.y * 40 };
+    score += Math.max(0, 180 - distSq(probe, pressureSpot) * 0.02);
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = dir;
+    }
+  });
+
+  bot.dir = best;
 }
 
 function updateEntities(dt) {
   const overloadFactor = state.overloadTimer > 0 ? 0.45 : 1;
   const base = CONFIG.baseSpeed + state.survived * CONFIG.speedRamp;
 
-  for (let i = 0; i < state.entities.length; i += 1) {
-    const entity = state.entities[i];
-    if (!entity.alive) continue;
+  state.entities.forEach((entity, index) => {
+    if (!entity.alive) return;
 
-    if (!entity.isPlayer) aiTurn(entity, dt * overloadFactor);
+    if (!entity.isPlayer) {
+      aiTurn(entity, dt * overloadFactor);
+    }
 
     const speed = entity.isPlayer
       ? base * state.speedMultiplier
-      : base * randomIn(0.86, 1.03) * overloadFactor;
+      : base * randomIn(0.88, 1.04) * overloadFactor;
 
     entity.x += entity.dir.x * speed * dt;
     entity.y += entity.dir.y * speed * dt;
 
+    entity.trailEvery -= dt;
+    if (entity.trailEvery <= 0) {
+      entity.trailEvery = CONFIG.segmentSize / Math.max(speed, 1);
+      addTrailPoint(entity);
+    }
+
     if (detectCollision(entity)) {
-      if (entity.isPlayer && state.phaseCharges > 0) {
+      if (index === 0 && state.phaseCharges > 0) {
         state.phaseCharges -= 1;
-        entity.x += entity.dir.x * 3.6;
-        entity.y += entity.dir.y * 3.6;
+        entity.x += entity.dir.x * 20;
+        entity.y += entity.dir.y * 20;
         pulseSynth(560, 0.08);
       } else {
         entity.alive = false;
-        entity.mesh.visible = false;
-        continue;
+        return;
       }
     }
 
     entity.trailEvery -= dt;
     if (entity.trailEvery <= 0) {
-      entity.trailEvery = CONFIG.segmentGap / Math.max(speed, 1);
-      spawnTrailPoint(entity);
+      entity.trailEvery = CONFIG.segmentSize / Math.max(speed, 1);
+      addTrailPoint(entity);
     }
+      }
+    }
+  });
 
-    syncEntityMesh(entity);
-  }
-
-  while (state.trailSegments.length > 3800) {
-    const old = state.trailSegments.shift();
-    gfx.scene.remove(old.mesh);
-  }
+  state.trails = state.trails.slice(-3000);
 }
 
 function updateParticles(dt) {
-  state.particles = state.particles.filter((p) => {
+  state.particles.forEach((p) => {
     p.life -= dt;
-    p.mesh.position.y += p.vy * dt;
-    p.mesh.material.opacity = Math.max(0, p.life / 0.7);
-    if (p.binary) p.mesh.position.x += Math.sin(state.survived * 10 + p.mesh.position.z) * dt * 0.2;
-
-    if (p.life <= 0) {
-      gfx.scene.remove(p.mesh);
-      return false;
-    }
-    return true;
+    p.y += 18 * dt;
   });
+  state.particles = state.particles.filter((p) => p.life > 0);
+}
+
+function drawGrid() {
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  const step = 32;
+  ctx.strokeStyle = 'rgba(28, 122, 163, 0.18)';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < w; x += step) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, h);
+    ctx.stroke();
+  }
+  for (let y = 0; y < h; y += step) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+  }
+}
+
+function render() {
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+
+  ctx.clearRect(0, 0, w, h);
+  drawGrid();
+
+  state.trails.forEach((trail) => {
+    ctx.fillStyle = trail.color;
+    ctx.shadowColor = trail.color;
+    ctx.shadowBlur = 12;
+    ctx.fillRect(trail.x - 2, trail.y - 2, 4, 4);
+  });
+
+  state.powerups.forEach((p) => {
+    const color = p.type === 'phase' ? '#8dffef' : '#ff8ae4';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
+    ctx.stroke();
+  });
+
+  state.entities.forEach((e) => {
+    if (!e.alive) return;
+    ctx.fillStyle = e.color;
+    ctx.shadowColor = e.color;
+    ctx.shadowBlur = 18;
+    ctx.fillRect(e.x - 6, e.y - 6, 12, 12);
+  });
+
+  state.particles.forEach((p) => {
+    ctx.globalAlpha = Math.max(0, p.life / 0.6);
+    ctx.fillStyle = p.color;
+    ctx.shadowColor = p.color;
+    ctx.shadowBlur = 8;
+    if (p.text) {
+      ctx.font = '12px monospace';
+      ctx.fillText(p.text, p.x, p.y);
+    } else {
+      ctx.fillRect(p.x, p.y, 2, 2);
+    }
+  });
+  ctx.globalAlpha = 1;
 }
 
 function updateUi() {
@@ -558,71 +484,24 @@ function updateUi() {
 
 function renderTrailOptions() {
   ui.trailOptions.innerHTML = '';
-  for (const style of TRAIL_STYLES) {
+  TRAIL_STYLES.forEach((style) => {
     const unlocked = state.unlockedTrailScore >= style.unlock;
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = unlocked ? style.label : `${style.label} (${style.unlock})`;
     button.disabled = !unlocked;
-    if (state.selectedTrail.id === style.id) button.classList.add('active');
-
+    if (state.selectedTrail.id === style.id) {
+      button.classList.add('active');
+    }
     button.addEventListener('click', () => {
       state.selectedTrail = style;
-      const player = state.entities[0];
-      if (player) {
-        player.color = style.color;
-        player.material.color.set(hexToInt(style.color));
-        player.material.emissive.set(hexToInt(style.color));
+      if (state.entities[0]) {
+        state.entities[0].color = style.color;
       }
       renderTrailOptions();
     });
-
     ui.trailOptions.appendChild(button);
-  }
-}
-
-function render() {
-  const pulse = 0.18 + Math.sin(state.survived * 2.5) * 0.04;
-  gfx.floor.material.emissive = new THREE.Color(0x080a12 + Math.floor(pulse * 1000));
-  gfx.renderer.render(gfx.scene, gfx.camera);
-}
-
-function endGame() {
-  state.running = false;
-  ui.overlay.classList.remove('hidden');
-  ui.overlayTitle.textContent = 'Run Ended';
-  ui.overlayText.textContent = `You lasted ${state.survived.toFixed(1)}s with ${Math.floor(state.score)} points.`;
-  ui.startBtn.textContent = 'Try Again';
-}
-
-function resetGame() {
-  cleanupObjects();
-
-  state.score = 0;
-  state.survived = 0;
-  state.speedMultiplier = 1;
-  state.closeCallMultiplier = 1;
-  state.nearMissCooldown = 0;
-  state.phaseCharges = 0;
-  state.overloadTimer = 0;
-  state.overloadCooldown = 0;
-  state.spawnGrace = 1.1;
-  state.powerups = [];
-  state.nextPowerup = CONFIG.powerupEveryMs;
-  state.trailSegments = [];
-  state.particles = [];
-
-  state.nextEntityId = 1;
-  state.entities = [createEntity(true, state.selectedTrail.color, { x: 0, y: 0, dir: { x: 1, y: 0 } })];
-  const spawns = [
-    { x: -90, y: -50, dir: { x: 1, y: 0 } },
-    { x: 90, y: 50, dir: { x: -1, y: 0 } },
-    { x: -90, y: 50, dir: { x: 0, y: -1 } },
-    { x: 90, y: -50, dir: { x: 0, y: 1 } },
-  ];
-  for (let i = 0; i < CONFIG.botCount; i += 1) {
-    state.entities.push(createEntity(false, BOT_COLORS[i % BOT_COLORS.length], spawns[i % spawns.length]));
-  }
+  });
 }
 
 function loop(timestamp) {
@@ -642,15 +521,14 @@ function loop(timestamp) {
 
   state.overloadTimer = Math.max(0, state.overloadTimer - dt);
   state.overloadCooldown = Math.max(0, state.overloadCooldown - dt);
-  state.spawnGrace = Math.max(0, state.spawnGrace - dt);
 
-  handlePowerupPickup(dt);
+  handlePowerupPickup();
   awardNearMiss(dt);
   updateEntities(dt);
   updateParticles(dt);
+  render();
   updateUi();
   syncAudio();
-  render();
 
   if (!state.entities[0].alive) {
     endGame();
@@ -658,6 +536,14 @@ function loop(timestamp) {
   }
 
   requestAnimationFrame(loop);
+}
+
+function endGame() {
+  state.running = false;
+  ui.overlay.classList.remove('hidden');
+  ui.overlayTitle.textContent = 'Run Ended';
+  ui.overlayText.textContent = `You lasted ${state.survived.toFixed(1)}s with ${Math.floor(state.score)} points.`;
+  ui.startBtn.textContent = 'Try Again';
 }
 
 function startGame() {
@@ -670,7 +556,6 @@ function startGame() {
 
 function initAudio() {
   if (audio.context) return;
-
   const context = new AudioContext();
   const master = context.createGain();
   master.gain.value = 0.08;
@@ -688,6 +573,7 @@ function initAudio() {
   audio.context = context;
   audio.master = master;
   audio.bass = bass;
+  audio.pulse = bassGain;
   audio.active = true;
 
   scheduleBeat();
@@ -726,8 +612,9 @@ function syncAudio() {
 ui.startBtn.addEventListener('click', startGame);
 ui.audioBtn.addEventListener('click', async () => {
   if (!audio.context) initAudio();
-  if (audio.context.state === 'suspended') await audio.context.resume();
-
+  if (audio.context.state === 'suspended') {
+    await audio.context.resume();
+  }
   audio.active = !audio.active;
   if (audio.active) {
     scheduleBeat();
@@ -738,14 +625,11 @@ ui.audioBtn.addEventListener('click', async () => {
   }
 });
 
-window.addEventListener('resize', () => {
-  resizeRenderer();
-  render();
-});
+window.addEventListener('resize', resizeCanvas);
 
-setupThree();
+resizeCanvas();
 setupControls();
 renderTrailOptions();
 resetGame();
-updateUi();
 render();
+updateUi();
