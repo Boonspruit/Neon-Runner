@@ -1,0 +1,134 @@
+:root {
+  color-scheme: dark;
+  --bg: #06030d;
+  --panel: rgba(12, 7, 28, 0.9);
+  --neon-cyan: #17f2ff;
+  --neon-pink: #ff2cc6;
+  --neon-purple: #8856ff;
+  --text: #e6f7ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(136, 86, 255, 0.22), transparent 40%),
+    radial-gradient(circle at 80% 10%, rgba(23, 242, 255, 0.16), transparent 35%),
+    var(--bg);
+  color: var(--text);
+}
+
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1rem;
+  display: grid;
+  gap: 0.8rem;
+}
+
+.hud,
+.controls-help {
+  background: var(--panel);
+  border: 1px solid rgba(136, 86, 255, 0.45);
+  border-radius: 12px;
+  padding: 0.8rem 1rem;
+  backdrop-filter: blur(4px);
+}
+
+h1 {
+  margin: 0 0 0.4rem;
+  font-size: 1.5rem;
+  color: var(--neon-cyan);
+  text-shadow: 0 0 8px rgba(23, 242, 255, 0.5);
+}
+
+.stats,
+.status-row,
+.customization {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 1rem;
+  align-items: center;
+}
+
+button {
+  background: linear-gradient(135deg, rgba(23, 242, 255, 0.2), rgba(136, 86, 255, 0.3));
+  border: 1px solid rgba(23, 242, 255, 0.6);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.active {
+  border-color: var(--neon-pink);
+  box-shadow: 0 0 12px rgba(255, 44, 198, 0.55);
+}
+
+.arena-wrap {
+  position: relative;
+  min-height: min(72vh, 700px);
+}
+
+canvas {
+  touch-action: none;
+  width: 100%;
+  height: min(72vh, 700px);
+  border-radius: 12px;
+  border: 1px solid rgba(23, 242, 255, 0.4);
+  background: linear-gradient(180deg, rgba(8, 10, 23, 0.95), rgba(2, 2, 5, 1));
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 0.5rem;
+  text-align: center;
+  padding: 1rem;
+  background: rgba(6, 4, 14, 0.62);
+  border-radius: 12px;
+}
+
+.overlay.hidden {
+  display: none;
+}
+
+.controls-help p {
+  margin: 0.2rem 0;
+}
+
+@media (max-width: 720px) {
+  body {
+    min-height: 100dvh;
+  }
+
+  .app {
+    min-height: 100dvh;
+    padding: 0.4rem;
+  }
+
+  .arena-wrap {
+    min-height: 68dvh;
+  }
+
+  canvas {
+    height: 68dvh;
+  }
+
+  .stats,
+  .status-row {
+    font-size: 0.88rem;
+  }
+}
