@@ -35,7 +35,7 @@ const TRAIL_STYLES = [
 ];
 
 const CONFIG = {
-  fieldHalf: 140,
+  fieldHalf: 110,
   baseSpeed: 22,
   speedRamp: 0.85,
   botCount: 7,
