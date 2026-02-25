@@ -11,6 +11,8 @@
       <section class="hud">
         <h1>Neon Runner</h1>
         <div class="stats">
+          <span>Player: <strong id="player-name">Runner-01</strong></span>
+          <span>Best: <strong id="best-score">0</strong></span>
           <span>Score: <strong id="score">0</strong></span>
           <span>Time: <strong id="time">0.0s</strong></span>
           <span>Speed: <strong id="speed">1.0x</strong></span>
@@ -33,6 +35,7 @@
           <p id="overlay-text">
             Tron arena survival. Use left/right controls to turn your bike relative to its current direction and avoid bot light walls.
           </p>
+          <button id="new-player-btn" type="button" class="secondary">New Player</button>
           <button id="start-btn" type="button">Start Run</button>
         </div>
       </section>
@@ -63,10 +66,20 @@
           document.body.appendChild(gameScript);
         }
 
+        function loadPostProcessing() {
+          return loadScript('https://unpkg.com/three@0.160.0/examples/js/postprocessing/EffectComposer.js')
+            .then(function () { return loadScript('https://unpkg.com/three@0.160.0/examples/js/postprocessing/RenderPass.js'); })
+            .then(function () { return loadScript('https://unpkg.com/three@0.160.0/examples/js/postprocessing/UnrealBloomPass.js'); })
+            .then(function () { return loadScript('https://unpkg.com/three@0.160.0/examples/js/postprocessing/ShaderPass.js'); })
+            .then(function () { return loadScript('https://unpkg.com/three@0.160.0/examples/js/shaders/CopyShader.js'); })
+            .then(function () { return loadScript('https://unpkg.com/three@0.160.0/examples/js/shaders/RGBShiftShader.js'); });
+        }
+
         loadScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r160/three.min.js')
           .catch(function () {
             return loadScript('https://unpkg.com/three@0.160.0/build/three.min.js');
           })
+          .then(function () { return loadPostProcessing().catch(function () {}); })
           .finally(startGameScript);
       })();
     </script>

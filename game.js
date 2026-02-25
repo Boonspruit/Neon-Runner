@@ -2,6 +2,8 @@ const canvas = document.getElementById('game');
 const arenaWrap = document.querySelector('.arena-wrap');
 
 const ui = {
+  playerName: document.getElementById('player-name'),
+  bestScore: document.getElementById('best-score'),
   score: document.getElementById('score'),
   time: document.getElementById('time'),
   speed: document.getElementById('speed'),
@@ -10,12 +12,39 @@ const ui = {
   overlayTitle: document.getElementById('overlay-title'),
   overlayText: document.getElementById('overlay-text'),
   startBtn: document.getElementById('start-btn'),
+  newPlayerBtn: document.getElementById('new-player-btn'),
   audioBtn: document.getElementById('audio-toggle'),
   fullscreenBtn: document.getElementById('fullscreen-btn'),
   trailOptions: document.getElementById('trail-options'),
   inGameMenu: document.getElementById('in-game-menu'),
   bgm: document.getElementById('bgm'),
 };
+
+const STORAGE_KEY = 'neonRunnerProfile.v1';
+
+function loadProfile() {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { name: 'Runner-01', bestScore: 0 };
+    const parsed = JSON.parse(raw);
+    const name = (parsed?.name || 'Runner-01').toString().slice(0, 20);
+    const bestScore = Number.isFinite(parsed?.bestScore) ? Math.max(0, parsed.bestScore) : 0;
+    return { name, bestScore };
+  } catch (error) {
+    return { name: 'Runner-01', bestScore: 0 };
+  }
+}
+
+function saveProfile() {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      name: state.playerName,
+      bestScore: state.bestScore,
+    }));
+  } catch (error) {
+    // Ignore storage failures.
+  }
+}
 
 const DIR = [
   { x: 0, z: -1 },
@@ -124,6 +153,8 @@ const state = {
   nextBotJoinMs: 0,
   botSpawnCursor: 0,
   pixelTimer: 0,
+  playerName: 'Runner-01',
+  bestScore: 0,
 };
 
 const audio = {
@@ -138,6 +169,9 @@ const audio = {
 
 const gfx = {
   renderer: null,
+  composer: null,
+  bloomPass: null,
+  chromaPass: null,
   scene: null,
   camera: null,
   floor: null,
@@ -270,6 +304,17 @@ function setupThree() {
   gfx.trailGeo = new THREE.BoxGeometry(1, 0.75, 1);
   gfx.sparkGeo = new THREE.SphereGeometry(0.14, 6, 6);
 
+  if (window.THREE?.EffectComposer && window.THREE?.RenderPass && window.THREE?.UnrealBloomPass && window.THREE?.ShaderPass && window.THREE?.RGBShiftShader) {
+    gfx.composer = new THREE.EffectComposer(gfx.renderer);
+    const renderPass = new THREE.RenderPass(gfx.scene, gfx.camera);
+    gfx.bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(1, 1), 0.95, 0.7, 0.2);
+    gfx.chromaPass = new THREE.ShaderPass(THREE.RGBShiftShader);
+    gfx.chromaPass.uniforms.amount.value = 0.00095;
+    gfx.composer.addPass(renderPass);
+    gfx.composer.addPass(gfx.bloomPass);
+    gfx.composer.addPass(gfx.chromaPass);
+  }
+
   resizeRenderer();
 }
 
@@ -277,6 +322,8 @@ function resizeRenderer() {
   const width = canvas.clientWidth;
   const height = canvas.clientHeight;
   gfx.renderer.setSize(width, height, false);
+  if (gfx.composer) gfx.composer.setSize(width, height);
+  if (gfx.bloomPass) gfx.bloomPass.setSize(width, height);
   gfx.camera.aspect = width / Math.max(1, height);
   gfx.camera.updateProjectionMatrix();
 }
@@ -937,6 +984,34 @@ function emitRespawnEffect(bot) {
   }
 }
 
+function explodeBike(entity) {
+  if (!entity?.mesh) return;
+  const voxelGeo = new THREE.BoxGeometry(0.26, 0.26, 0.26);
+  const voxelCount = 28;
+  for (let i = 0; i < voxelCount; i += 1) {
+    const mesh = new THREE.Mesh(voxelGeo, neonMaterial(entity.color, 0.92));
+    mesh.position.set(
+      entity.x + randomIn(-0.5, 0.5),
+      randomIn(0.25, 0.85),
+      entity.z + randomIn(-0.5, 0.5),
+    );
+    gfx.scene.add(mesh);
+    state.particles.push({
+      mesh,
+      life: randomIn(0.55, 1.05),
+      vy: randomIn(1.0, 3.9),
+      driftX: randomIn(-3.2, 3.2),
+      driftZ: randomIn(-3.2, 3.2),
+      spinX: randomIn(-9, 9),
+      spinY: randomIn(-9, 9),
+      spinZ: randomIn(-9, 9),
+      gravity: 8.4,
+      voxel: true,
+      binary: false,
+    });
+  }
+}
+
 function activateOverload() {
   // Power-ups are disabled.
 }
@@ -989,6 +1064,7 @@ function updateEntities(dt) {
 
     if (checkCollision(e, prevX, prevZ, e.x, e.z)) {
       e.alive = false;
+      explodeBike(e);
       e.mesh.visible = false;
       if (e.isPlayer) {
         playCrashSound();
@@ -1054,10 +1130,20 @@ function updatePowerups() {
 function updateParticles(dt) {
   state.particles = state.particles.filter((p) => {
     p.life -= dt;
-    p.mesh.position.y += p.vy * dt;
-    p.mesh.position.x += p.driftX * dt;
-    p.mesh.position.z += p.driftZ * dt;
-    if (p.binary) p.mesh.position.y += Math.sin(state.survived * 8) * dt * 0.12;
+    if (p.voxel) {
+      p.vy -= (p.gravity || 0) * dt;
+      p.mesh.position.y += p.vy * dt;
+      p.mesh.position.x += p.driftX * dt;
+      p.mesh.position.z += p.driftZ * dt;
+      p.mesh.rotation.x += (p.spinX || 0) * dt;
+      p.mesh.rotation.y += (p.spinY || 0) * dt;
+      p.mesh.rotation.z += (p.spinZ || 0) * dt;
+    } else {
+      p.mesh.position.y += p.vy * dt;
+      p.mesh.position.x += p.driftX * dt;
+      p.mesh.position.z += p.driftZ * dt;
+      if (p.binary) p.mesh.position.y += Math.sin(state.survived * 8) * dt * 0.12;
+    }
     p.mesh.material.opacity = Math.max(0, p.life / 0.75);
     if (p.life <= 0) { gfx.scene.remove(p.mesh); return false; }
     return true;
@@ -1079,6 +1165,10 @@ function updateGame(dt) {
 
   state.survived += dt;
   state.score += dt * 15 * state.closeCallMultiplier;
+  if (state.score > state.bestScore) {
+    state.bestScore = state.score;
+    saveProfile();
+  }
   state.pixelTimer = Math.max(0, state.pixelTimer - dt);
   if (state.pixelTimer <= 0) canvas.classList.remove('power-effect');
 
@@ -1098,6 +1188,8 @@ function updateGame(dt) {
 }
 
 function updateUi() {
+  ui.playerName.textContent = state.playerName;
+  ui.bestScore.textContent = Math.floor(state.bestScore).toString();
   ui.score.textContent = Math.floor(state.score).toString();
   ui.time.textContent = `${state.survived.toFixed(1)}s`;
   ui.speed.textContent = `${state.speedMul.toFixed(2)}x`;
@@ -1144,7 +1236,13 @@ function renderTrailOptions() {
 function render() {
   const pulse = 0.2 + Math.sin(state.survived * 2.5) * 0.06;
   gfx.floor.material.emissiveIntensity = pulse;
-  gfx.renderer.render(gfx.scene, gfx.camera);
+  if (gfx.bloomPass) gfx.bloomPass.strength = 0.85 + Math.min(0.8, state.speedMul * 0.18);
+  if (gfx.chromaPass) gfx.chromaPass.uniforms.amount.value = 0.00075 + Math.min(0.003, state.speedMul * 0.00045);
+  if (gfx.composer) {
+    gfx.composer.render();
+  } else {
+    gfx.renderer.render(gfx.scene, gfx.camera);
+  }
 }
 
 function loop(ts) {
@@ -1172,10 +1270,14 @@ function startGame() {
 
 function endGame() {
   state.running = false;
+  if (state.score > state.bestScore) {
+    state.bestScore = state.score;
+    saveProfile();
+  }
   document.body.classList.remove('game-active');
   ui.overlay.classList.remove('hidden');
   ui.overlayTitle.textContent = 'Run Ended';
-  ui.overlayText.textContent = `Survived ${state.survived.toFixed(1)}s | Score ${Math.floor(state.score)}. Press Space or Try Again.`;
+  ui.overlayText.textContent = `${state.playerName} survived ${state.survived.toFixed(1)}s | Score ${Math.floor(state.score)} | Best ${Math.floor(state.bestScore)}. Press Space or Try Again.`;
   ui.startBtn.textContent = 'Try Again';
   ui.inGameMenu?.classList.remove('hidden');
 }
@@ -1301,6 +1403,16 @@ function syncMusic() {
 
 ui.startBtn.addEventListener('click', startGame);
 ui.fullscreenBtn.addEventListener('click', requestGameFullscreen);
+ui.newPlayerBtn?.addEventListener('click', () => {
+  const entered = window.prompt('Enter player name (max 20 chars):', state.playerName) || '';
+  const name = entered.trim().slice(0, 20);
+  if (!name) return;
+  state.playerName = name;
+  state.bestScore = 0;
+  saveProfile();
+  updateUi();
+  ui.overlayText.textContent = `${state.playerName}, press Start Run to enter the grid.`;
+});
 ui.audioBtn.addEventListener('click', async () => {
   if (!audio.context) initMusic();
   if (audio.context.state === 'suspended') await audio.context.resume();
@@ -1323,6 +1435,10 @@ ui.audioBtn.addEventListener('click', async () => {
 window.addEventListener('resize', resizeRenderer);
 document.addEventListener('pointerdown', requestFullscreenIfMobile, { once: true });
 prepareBgm();
+
+const profile = loadProfile();
+state.playerName = profile.name;
+state.bestScore = profile.bestScore;
 
 if (typeof window.THREE === 'undefined') {
   ui.overlayTitle.textContent = 'Three.js failed to load';

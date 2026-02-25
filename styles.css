@@ -65,6 +65,11 @@ button {
   cursor: pointer;
 }
 
+button.secondary {
+  background: linear-gradient(135deg, rgba(255, 44, 198, 0.16), rgba(136, 86, 255, 0.24));
+  border-color: rgba(255, 44, 198, 0.55);
+}
+
 button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
