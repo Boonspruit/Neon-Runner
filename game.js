@@ -6,8 +6,6 @@ const ui = {
   time: document.getElementById('time'),
   speed: document.getElementById('speed'),
   multiplier: document.getElementById('multiplier'),
-  phaseStatus: document.getElementById('phase-status'),
-  overloadStatus: document.getElementById('overload-status'),
   overlay: document.getElementById('overlay'),
   overlayTitle: document.getElementById('overlay-title'),
   overlayText: document.getElementById('overlay-text'),
@@ -15,6 +13,7 @@ const ui = {
   audioBtn: document.getElementById('audio-toggle'),
   fullscreenBtn: document.getElementById('fullscreen-btn'),
   trailOptions: document.getElementById('trail-options'),
+  inGameMenu: document.getElementById('in-game-menu'),
   bgm: document.getElementById('bgm'),
 };
 
@@ -40,8 +39,8 @@ const CONFIG = {
   baseSpeed: 22,
   speedRamp: 0.85,
   botCount: 7,
-  trailSpacing: 1.04,
-  maxTrailSegments: 12000,
+  trailSpacing: 0.3,
+  maxTrailLength: 760,
   nearMissDist: 2.8,
   powerupSpawnMs: 5200,
 };
@@ -96,6 +95,28 @@ function randomIn(min, max) { return Math.random() * (max - min) + min; }
 function hexToInt(hex) { return Number.parseInt(hex.replace('#', '0x'), 16); }
 function distSq2D(a, b) { const dx = a.x - b.x; const dz = a.z - b.z; return dx * dx + dz * dz; }
 
+function syncEntityTrailColor(entity) {
+  if (!entity?.trailMaterial) return;
+  const color = hexToInt(entity.color);
+  entity.trailMaterial.color.setHex(color);
+  if (entity.trailMaterial.emissive) {
+    entity.trailMaterial.emissive.setHex(color);
+  }
+}
+
+function getRenderableTrailPoints(entity) {
+  const points = entity.trailSamples;
+  if (points.length <= 80) return points;
+
+  const keepRecent = 80;
+  const olderEnd = Math.max(0, points.length - keepRecent);
+  const reduced = [];
+
+  for (let i = 0; i < olderEnd; i += 2) reduced.push(points[i]);
+  for (let i = olderEnd; i < points.length; i += 1) reduced.push(points[i]);
+  return reduced;
+}
+
 function neonMaterial(color, emissive = 0.9) {
   return new THREE.MeshStandardMaterial({
     color: hexToInt(color), emissive: hexToInt(color), emissiveIntensity: emissive, roughness: 0.35, metalness: 0.22,
@@ -109,7 +130,7 @@ function setupThree() {
   gfx.camera = new THREE.PerspectiveCamera(58, 1, 0.1, 1100);
 
   try {
-    gfx.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+    gfx.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false, powerPreference: 'high-performance' });
     gfx.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     gfx.renderer.outputColorSpace = THREE.SRGBColorSpace;
   } catch (error) {
@@ -144,7 +165,7 @@ function setupThree() {
   const right = left.clone(); right.position.x = CONFIG.fieldHalf;
   gfx.scene.add(top, bottom, left, right);
 
-  gfx.trailGeo = new THREE.BoxGeometry(1.25, 0.75, 1.25);
+  gfx.trailGeo = new THREE.BoxGeometry(1, 0.75, 1);
   gfx.sparkGeo = new THREE.SphereGeometry(0.14, 6, 6);
 
   resizeRenderer();
@@ -190,7 +211,7 @@ function createEntity(isPlayer, color, x, z, dirIndex) {
   mesh.position.set(x, 0.1, z);
   mesh.rotation.y = dirIndex * (Math.PI / 2);
   gfx.scene.add(mesh);
-  return {
+  const entity = {
     id: state.nextEntityId++,
     isPlayer,
     color,
@@ -200,46 +221,128 @@ function createEntity(isPlayer, color, x, z, dirIndex) {
     alive: true,
     mesh,
     trailTick: 0,
+    trailSamples: [],
+    trailGeometry: new THREE.BufferGeometry(),
+    trailMaterial: new THREE.MeshBasicMaterial({
+      color: hexToInt(color),
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+    trailMesh: null,
+    trailPendingDist: 0,
+    trailDirty: true,
     thinkTimer: randomIn(0.05, 0.16),
     targetId: null,
     pathMemory: [],
   };
+  entity.trailSamples.push({ ownerId: entity.id, owner: isPlayer ? 'player' : 'bot', x, z, bornAt: state.survived });
+  syncEntityTrailColor(entity);
+  entity.trailMesh = new THREE.Mesh(entity.trailGeometry, entity.trailMaterial);
+  entity.trailMesh.frustumCulled = false;
+  gfx.scene.add(entity.trailMesh);
+  return entity;
 }
 
-function createTrailPoint(entity) {
-  const mat = neonMaterial(entity.color, 0.75);
-  mat.transparent = true;
-  mat.opacity = 1;
-  mat.depthWrite = false;
-  const mesh = new THREE.Mesh(gfx.trailGeo, mat);
-  mesh.position.set(entity.x, 0.06, entity.z);
-  gfx.scene.add(mesh);
-  state.trails.push({ ownerId: entity.id, owner: entity.isPlayer ? 'player' : 'bot', x: entity.x, z: entity.z, bornAt: state.survived, mesh });
+function rebuildTrailMesh(entity) {
+  const points = getRenderableTrailPoints(entity);
 
-  if (Math.random() < 0.32) {
-    const style = entity.isPlayer ? state.selectedTrail : { color: entity.color, particle: 'spark' };
-    const pm = new THREE.Mesh(gfx.sparkGeo, new THREE.MeshBasicMaterial({ color: hexToInt(style.color), transparent: true, opacity: 0.95 }));
-    pm.position.set(entity.x + randomIn(-0.2, 0.2), 0.62, entity.z + randomIn(-0.2, 0.2));
-    gfx.scene.add(pm);
-    state.particles.push({ mesh: pm, life: 0.75, vy: randomIn(0.12, 0.35), driftX: randomIn(-0.25, 0.25), driftZ: randomIn(-0.25, 0.25), binary: style.particle === 'binary' });
+  if (points.length < 2) {
+    entity.trailMesh.visible = false;
+    return;
+  }
+
+  const baseY = 0.06;
+  const wallHeight = 0.72;
+  const topY = baseY + wallHeight;
+  const wallWidth = 0.05;
+  const positions = [];
+  const indices = [];
+
+  for (let i = 0; i < points.length; i += 1) {
+    const prev = points[Math.max(0, i - 1)];
+    const next = points[Math.min(points.length - 1, i + 1)];
+    let tx = next.x - prev.x;
+    let tz = next.z - prev.z;
+    let len = Math.hypot(tx, tz);
+    if (len < 0.0001) { tx = 1; tz = 0; len = 1; }
+
+    const nx = (-tz / len) * wallWidth;
+    const nz = (tx / len) * wallWidth;
+
+    const px = points[i].x;
+    const pz = points[i].z;
+
+    // single wall ribbon, slightly widened for visibility
+    positions.push(px, baseY, pz);
+    positions.push(px + nx, baseY, pz + nz);
+    positions.push(px, topY, pz);
+    positions.push(px + nx, topY, pz + nz);
+
+    if (i < points.length - 1) {
+      const a = i * 4;
+      const b = a + 1;
+      const c = a + 2;
+      const d = a + 3;
+      const e = a + 4;
+      const f = a + 5;
+      const g = a + 6;
+      const h = a + 7;
+      indices.push(a, c, e, c, g, e);
+      indices.push(b, f, d, d, f, h);
+    }
+  }
+
+  entity.trailGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  entity.trailGeometry.setIndex(indices);
+  entity.trailGeometry.computeBoundingSphere();
+  entity.trailMesh.visible = true;
+  entity.trailDirty = false;
+}
+
+function addTrailSample(entity, x, z) {
+  const sample = {
+    ownerId: entity.id,
+    owner: entity.isPlayer ? 'player' : 'bot',
+    x,
+    z,
+    bornAt: state.survived,
+  };
+  entity.trailSamples.push(sample);
+  if (entity.trailSamples.length > CONFIG.maxTrailLength) {
+    entity.trailSamples.shift();
+  }
+  entity.trailDirty = true;
+}
+
+function addInterpolatedTrailSamples(entity, fromX, fromZ, toX, toZ) {
+  const dx = toX - fromX;
+  const dz = toZ - fromZ;
+  const dist = Math.hypot(dx, dz);
+  if (dist < 0.001) return;
+
+  entity.trailPendingDist += dist;
+  const step = Math.max(0.01, CONFIG.trailSpacing);
+  const steps = Math.floor(entity.trailPendingDist / step);
+  if (steps <= 0) return;
+
+  entity.trailPendingDist -= steps * step;
+  for (let i = 1; i <= steps; i += 1) {
+    const t = i / (steps + 1);
+    const x = fromX + dx * t;
+    const z = fromZ + dz * t;
+    addTrailSample(entity, x, z);
   }
 }
 
 function spawnPowerup() {
-  const type = Math.random() > 0.5 ? 'phase' : 'overload';
-  const color = type === 'phase' ? '#8dffef' : '#ff8ae4';
-  const geometry = type === 'phase' ? new THREE.IcosahedronGeometry(0.95, 0) : new THREE.OctahedronGeometry(1.05, 0);
-  const mesh = new THREE.Mesh(geometry, neonMaterial(color, 1.1));
-  mesh.position.set(randomIn(-118, 118), 1.6, randomIn(-118, 118));
-  gfx.scene.add(mesh);
-  state.powerups.push({ type, x: mesh.position.x, z: mesh.position.z, ttl: 15, mesh });
+  // Power-up system removed.
 }
 
 function cleanupRunObjects() {
-  for (const e of state.entities) gfx.scene.remove(e.mesh);
-  for (const t of state.trails) gfx.scene.remove(t.mesh);
+  for (const e of state.entities) { gfx.scene.remove(e.mesh); gfx.scene.remove(e.trailMesh); e.trailGeometry?.dispose?.(); e.trailMaterial?.dispose?.(); }
   for (const p of state.particles) gfx.scene.remove(p.mesh);
-  for (const p of state.powerups) gfx.scene.remove(p.mesh);
   state.entities = []; state.trails = []; state.particles = []; state.powerups = [];
 }
 
@@ -279,9 +382,8 @@ function trailFadeAge() {
   return Math.max(3.2, 14 - state.survived * 0.22);
 }
 
-function trailLife(t) {
-  const life = 1 - (state.survived - t.bornAt) / trailFadeAge();
-  return Math.max(0, Math.min(1, life));
+function trailLife() {
+  return 1;
 }
 
 function turnLeft(e) { e.dirIndex = (e.dirIndex + 3) % 4; }
@@ -303,7 +405,6 @@ function setupControls() {
     if (!state.running && (key === ' ' || key === 'spacebar')) { startGame(); return; }
     if (event.key === 'ArrowLeft' || key === 'a') handleTurnInput('left');
     if (event.key === 'ArrowRight' || key === 'd') handleTurnInput('right');
-    if ((event.key === ' ' || key === 'spacebar') && state.running) activateOverload();
   }, { passive: false });
 
   let touchStart = null;
@@ -416,6 +517,66 @@ function projectedFreeSpace(bot, optDir) {
   return count;
 }
 
+function pathfindExitScore(bot, optDir) {
+  const step = 4;
+  const d = DIR[optDir];
+  const startQx = Math.round((bot.x + d.x * 4) / step);
+  const startQz = Math.round((bot.z + d.z * 4) / step);
+  const rangeCells = 18;
+  const maxNodes = 280;
+  const queue = [{ qx: startQx, qz: startQz, dist: 0 }];
+  const visited = new Set();
+  const blockedCache = new Map();
+  let qi = 0;
+  let explored = 0;
+  let foundDist = null;
+
+  function isBlocked(qx, qz) {
+    const key = `${qx},${qz}`;
+    if (blockedCache.has(key)) return blockedCache.get(key);
+    const px = qx * step;
+    const pz = qz * step;
+    const blocked = pointBlocked(px, pz, bot.id);
+    blockedCache.set(key, blocked);
+    return blocked;
+  }
+
+  while (qi < queue.length && explored < maxNodes) {
+    const { qx, qz, dist } = queue[qi++];
+    const key = `${qx},${qz}`;
+    if (visited.has(key)) continue;
+    visited.add(key);
+
+    if (Math.abs(qx - startQx) > rangeCells || Math.abs(qz - startQz) > rangeCells) continue;
+    if (isBlocked(qx, qz)) continue;
+
+    explored += 1;
+
+    let openNeighbors = 0;
+    const neighbors = [
+      { qx: qx + 1, qz },
+      { qx: qx - 1, qz },
+      { qx, qz: qz + 1 },
+      { qx, qz: qz - 1 },
+    ];
+    for (const n of neighbors) {
+      if (Math.abs(n.qx - startQx) > rangeCells || Math.abs(n.qz - startQz) > rangeCells) continue;
+      if (!isBlocked(n.qx, n.qz)) openNeighbors += 1;
+      queue.push({ qx: n.qx, qz: n.qz, dist: dist + 1 });
+    }
+
+    if (openNeighbors >= 3 && dist >= 4) {
+      foundDist = dist;
+      break;
+    }
+  }
+
+  if (foundDist !== null) {
+    return 240 - foundDist * 8 + explored * 0.8;
+  }
+  return explored * 0.7 - 160;
+}
+
 function loopPenalty(bot, opt) {
   const d = DIR[opt];
   const nx = Math.round((bot.x + d.x * 4) / 2);
@@ -468,7 +629,8 @@ function safestTurn(bot) {
 
   for (const opt of options) {
     const ownRisk = willHitOwnTrailSoon(bot, opt, 20) ? 1 : 0;
-    const score = projectedFreeSpace(bot, opt) - estimateDanger(bot.x, bot.z, opt, bot.id) - ownRisk * 200;
+    const escapeScore = pathfindExitScore(bot, opt);
+    const score = projectedFreeSpace(bot, opt) + escapeScore - estimateDanger(bot.x, bot.z, opt, bot.id) - ownRisk * 200;
     if (score > bestScore) {
       bestScore = score;
       best = opt;
@@ -504,6 +666,7 @@ function aiTurn(bot, dt) {
     score += Math.max(0, 120 - distSq2D(probe, tFuture));
     score += wallInterceptScore(bot, opt, target) * 1.3;
     score += projectedFreeSpace(bot, opt) * 0.95;
+    score += pathfindExitScore(bot, opt);
 
     if (opt === preferred) score += 24;
     score -= loopPenalty(bot, opt);
@@ -536,51 +699,37 @@ function checkCollision(entity) {
 }
 
 function activateOverload() {
-  if (state.overloadCooldown > 0 || state.overloadTimer > 0) return;
-  state.overloadTimer = 3.8;
-  state.overloadCooldown = 10;
-  triggerSynth(180, 0.1, 'triangle');
+  // Power-ups are disabled.
 }
 
 function updateEntities(dt) {
-  const overloadFactor = state.overloadTimer > 0 ? 0.45 : 1;
   const worldSpeed = (CONFIG.baseSpeed + state.survived * CONFIG.speedRamp) * state.speedMul;
 
   for (let i = 0; i < state.entities.length; i += 1) {
     const e = state.entities[i];
     if (!e.alive) continue;
-    if (!e.isPlayer) aiTurn(e, dt * overloadFactor);
+    if (!e.isPlayer) aiTurn(e, dt);
 
-    const speed = e.isPlayer ? worldSpeed : worldSpeed * randomIn(0.9, 1.03) * overloadFactor;
+    const speed = e.isPlayer ? worldSpeed : worldSpeed * randomIn(0.9, 1.03);
 
     if (!e.isPlayer && willHitOwnTrailSoon(e, e.dirIndex, 10)) {
       e.dirIndex = safestTurn(e);
     }
 
     const d = entityDir(e);
+    const prevX = e.x;
+    const prevZ = e.z;
     e.x += d.x * speed * dt;
     e.z += d.z * speed * dt;
 
     if (checkCollision(e)) {
-      if (e.isPlayer && state.phaseGhostTimer > 0 && state.phaseGhostHits > 0) {
-        state.phaseGhostHits -= 1;
-        state.phaseGhostTimer = 0;
-        e.x += d.x * 2.8;
-        e.z += d.z * 2.8;
-        triggerSynth(560, 0.08, 'square');
-      } else {
-        e.alive = false;
-        e.mesh.visible = false;
-        if (e.isPlayer) playCrashSound();
-        continue;
-      }
+      e.alive = false;
+      e.mesh.visible = false;
+      if (e.isPlayer) playCrashSound();
+      continue;
     }
 
-    e.trailTick -= dt;
-    if (e.trailTick <= 0) {
-      e.trailTick = CONFIG.trailSpacing / Math.max(speed, 0.01);
-      createTrailPoint(e);
-    }
+    addInterpolatedTrailSamples(e, prevX, prevZ, e.x, e.z);
 
     e.mesh.position.set(e.x, 0.1, e.z);
     e.mesh.rotation.y = e.dirIndex * (Math.PI / 2);
@@ -592,27 +741,11 @@ function updateEntities(dt) {
     }
   }
 
-  const fadeAge = trailFadeAge();
-  state.trails = state.trails.filter((t) => {
-    const age = state.survived - t.bornAt;
-    const life = trailLife(t);
-    const easedLife = Math.max(0, Math.min(1, life * life * (3 - 2 * life)));
-
-    if (t.mesh?.material) {
-      t.mesh.material.emissiveIntensity = 0.08 + easedLife * 0.82;
-      t.mesh.material.opacity = Math.max(0, easedLife);
-    }
-
-    if (age > fadeAge || life <= 0.003) {
-      gfx.scene.remove(t.mesh);
-      return false;
-    }
-    return true;
-  });
-
-  while (state.trails.length > CONFIG.maxTrailSegments) {
-    const old = state.trails.shift();
-    gfx.scene.remove(old.mesh);
+  state.trails = [];
+  for (const e of state.entities) {
+    syncEntityTrailColor(e);
+    for (const sample of e.trailSamples) state.trails.push(sample);
+    if (e.trailDirty) rebuildTrailMesh(e);
   }
 }
 
@@ -644,34 +777,8 @@ function triggerPixelEffect() {
   canvas.classList.add('power-effect');
 }
 
-function updatePowerups(dt) {
-  const p = player();
-  state.nextPowerupMs -= dt * 1000;
-  if (state.nextPowerupMs <= 0) { spawnPowerup(); state.nextPowerupMs = CONFIG.powerupSpawnMs; }
-
-  state.powerups = state.powerups.filter((item) => {
-    item.ttl -= dt;
-    item.mesh.rotation.y += dt * 1.6;
-    item.mesh.rotation.x += dt * 0.9;
-    if (item.ttl <= 0) { gfx.scene.remove(item.mesh); return false; }
-
-    if (distSq2D(p, item) < 2.8) {
-      if (item.type === 'phase') {
-        state.phaseGhostTimer = 7;
-        state.phaseGhostHits = 1;
-      } else {
-        state.overloadTimer = 3.3;
-        state.overloadCooldown = Math.max(0, state.overloadCooldown - 4);
-      }
-      triggerPixelEffect();
-      state.score += 45;
-      triggerSynth(470, 0.08, 'triangle');
-      gfx.scene.remove(item.mesh);
-      return false;
-    }
-
-    return true;
-  });
+function updatePowerups() {
+  // Power-up system removed.
 }
 
 function updateParticles(dt) {
@@ -702,9 +809,6 @@ function updateGame(dt) {
 
   state.survived += dt;
   state.score += dt * 15 * state.closeCallMultiplier;
-  state.overloadTimer = Math.max(0, state.overloadTimer - dt);
-  state.overloadCooldown = Math.max(0, state.overloadCooldown - dt);
-  state.phaseGhostTimer = Math.max(0, state.phaseGhostTimer - dt);
   state.pixelTimer = Math.max(0, state.pixelTimer - dt);
   if (state.pixelTimer <= 0) canvas.classList.remove('power-effect');
 
@@ -722,10 +826,6 @@ function updateUi() {
   ui.time.textContent = `${state.survived.toFixed(1)}s`;
   ui.speed.textContent = `${state.speedMul.toFixed(2)}x`;
   ui.multiplier.textContent = `${state.closeCallMultiplier.toFixed(2)}x`;
-  ui.phaseStatus.textContent = state.phaseGhostTimer > 0 ? `Ghost ${state.phaseGhostTimer.toFixed(1)}s` : 'Ready';
-  if (state.overloadTimer > 0) ui.overloadStatus.textContent = `Active ${state.overloadTimer.toFixed(1)}s`;
-  else if (state.overloadCooldown > 0) ui.overloadStatus.textContent = `Cooldown ${state.overloadCooldown.toFixed(1)}s`;
-  else ui.overloadStatus.textContent = 'Ready';
 
   state.unlockedTrailScore = Math.max(state.unlockedTrailScore, state.score);
   renderTrailOptions();
@@ -750,6 +850,9 @@ function renderTrailOptions() {
         body.material.color.setHex(hexToInt(style.color));
         body.material.emissive.setHex(hexToInt(style.color));
       }
+      if (p?.trailMaterial) {
+        syncEntityTrailColor(p);
+      }
       renderTrailOptions();
     });
 
@@ -759,7 +862,7 @@ function renderTrailOptions() {
 
 function render() {
   const pulse = 0.2 + Math.sin(state.survived * 2.5) * 0.06;
-  gfx.floor.material.emissiveIntensity = pulse + (state.overloadTimer > 0 ? 0.22 : 0);
+  gfx.floor.material.emissiveIntensity = pulse;
   gfx.renderer.render(gfx.scene, gfx.camera);
 }
 
@@ -783,6 +886,7 @@ function startGame() {
   state.running = true;
   state.lastTime = performance.now();
   ui.overlay.classList.add('hidden');
+  ui.inGameMenu?.classList.add('hidden');
 }
 
 function endGame() {
@@ -792,6 +896,7 @@ function endGame() {
   ui.overlayTitle.textContent = 'Run Ended';
   ui.overlayText.textContent = `Survived ${state.survived.toFixed(1)}s | Score ${Math.floor(state.score)}. Press Space or Try Again.`;
   ui.startBtn.textContent = 'Try Again';
+  ui.inGameMenu?.classList.remove('hidden');
 }
 
 function playCrashSound() {

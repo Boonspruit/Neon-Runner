@@ -89,6 +89,29 @@ canvas {
   background: linear-gradient(180deg, rgba(8, 10, 23, 0.95), rgba(2, 2, 5, 1));
 }
 
+
+.in-game-menu {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 5;
+  background: rgba(5, 9, 18, 0.58);
+  border: 1px solid rgba(23, 242, 255, 0.45);
+  border-radius: 10px;
+  padding: 0.45rem 0.55rem;
+  backdrop-filter: blur(4px);
+}
+
+.in-game-menu p {
+  margin: 0 0 0.3rem;
+  font-size: 0.72rem;
+  opacity: 0.9;
+}
+
+.in-game-menu.hidden {
+  display: none;
+}
+
 .overlay {
   position: absolute;
   inset: 0;
@@ -116,20 +139,34 @@ canvas {
 
   .app {
     min-height: 100dvh;
-    padding: 0.4rem;
+    padding: 0;
+    gap: 0;
+  }
+
+  .hud,
+  .controls-help {
+    display: none;
   }
 
   .arena-wrap {
-    min-height: 68dvh;
+    min-height: 100dvh;
+    height: 100dvh;
   }
 
   canvas {
-    height: 68dvh;
+    height: 100dvh;
+    border-radius: 0;
+    border: none;
   }
 
-  .stats,
-  .status-row {
-    font-size: 0.88rem;
+  .in-game-menu {
+    top: 0.45rem;
+    right: 0.45rem;
+    padding: 0.35rem 0.45rem;
+  }
+
+  .in-game-menu p {
+    font-size: 0.65rem;
   }
 }
 
@@ -155,6 +192,11 @@ canvas.power-effect {
   height: 100vh;
   border-radius: 0;
   border: none;
+}
+
+.arena-wrap:fullscreen .in-game-menu {
+  top: 0.75rem;
+  right: 0.75rem;
 }
 
 .arena-wrap:fullscreen .overlay {

@@ -17,16 +17,17 @@
           <span>Close-Call: <strong id="multiplier">1.0x</strong></span>
         </div>
         <div class="status-row">
-          <span>PWR-1 <strong id="phase-status">Ready</strong></span>
-          <span>PWR-2 <strong id="overload-status">Ready</strong></span>
           <button id="fullscreen-btn" type="button">Fullscreen</button>
           <button id="audio-toggle" type="button">Start Music</button>
         </div>
-        <div class="customization" id="trail-options"></div>
       </section>
 
       <section class="arena-wrap">
         <canvas id="game" tabindex="0" aria-label="Neon Runner game canvas"></canvas>
+        <div class="in-game-menu hidden" id="in-game-menu" aria-label="Color menu">
+          <p>Bike Color</p>
+          <div class="customization" id="trail-options"></div>
+        </div>
         <div class="overlay" id="overlay">
           <h2 id="overlay-title">Left/Right Steering</h2>
           <p id="overlay-text">
@@ -37,7 +38,7 @@
       </section>
 
       <section class="controls-help">
-        <p><strong>Desktop:</strong> Arrow Left/Right or A/D to turn. Space starts/tries again and can trigger overload.</p>
+        <p><strong>Desktop:</strong> Arrow Left/Right or A/D to turn. Space starts/tries again.</p>
         <p><strong>Phone:</strong> Swipe left or right only.</p>
       </section>
     </main>
