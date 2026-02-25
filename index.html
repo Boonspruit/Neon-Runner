@@ -17,27 +17,28 @@
           <span>Close-Call: <strong id="multiplier">1.0x</strong></span>
         </div>
         <div class="status-row">
-          <span>Phase Shift: <strong id="phase-status">0</strong></span>
+          <span>Phase Shift: <strong id="phase-status">Ready</strong></span>
           <span>System Overload: <strong id="overload-status">Ready</strong></span>
-          <button id="audio-toggle" type="button">Start Audio</button>
+          <button id="fullscreen-btn" type="button">Fullscreen</button>
+          <button id="audio-toggle" type="button">Start Music</button>
         </div>
         <div class="customization" id="trail-options"></div>
       </section>
 
       <section class="arena-wrap">
-        <canvas id="game" aria-label="Neon Runner game canvas"></canvas>
+        <canvas id="game" tabindex="0" aria-label="Neon Runner game canvas"></canvas>
         <div class="overlay" id="overlay">
-          <h2 id="overlay-title">Swipe or Use Arrow Keys</h2>
+          <h2 id="overlay-title">Left/Right Steering</h2>
           <p id="overlay-text">
-            Drive across the Tron grid and dodge bot light walls. Swipe like Subway Surfers (or use arrow keys) to turn instantly and survive the longest.
+            Tron arena survival. Use left/right controls to turn your bike relative to its current direction and avoid bot light walls.
           </p>
           <button id="start-btn" type="button">Start Run</button>
         </div>
       </section>
 
       <section class="controls-help">
-        <p><strong>Desktop:</strong> Arrow keys / WASD to steer your Tron rider.</p>
-        <p><strong>Phone:</strong> Swipe controls like Subway Surfers (down swipe also triggers System Overload).</p>
+        <p><strong>Desktop:</strong> Arrow Left/Right or A/D to turn. Space starts/tries again and can trigger overload.</p>
+        <p><strong>Phone:</strong> Swipe left or right only.</p>
       </section>
     </main>
 
