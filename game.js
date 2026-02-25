@@ -143,6 +143,7 @@ const gfx = {
   floor: null,
   trailGeo: null,
   sparkGeo: null,
+  bitTextures: {},
 };
 
 function randomIn(min, max) { return Math.random() * (max - min) + min; }
@@ -186,6 +187,7 @@ function trailSegmentHit(x, z, opts = {}) {
     for (let i = 1; i < samples.length; i += 1) {
       const a = samples[i - 1];
       const b = samples[i];
+      if (state.survived - b.bornAt > trailFadeAge()) continue;
       if (ownRecentGrace > 0 && owner.id === onlyEntityId && state.survived - b.bornAt < ownRecentGrace) continue;
       if (pointSegmentDistSq(x, z, a.x, a.z, b.x, b.z) < hitSq) return true;
     }
@@ -340,6 +342,7 @@ function createEntity(isPlayer, color, x, z, dirIndex) {
     spawnZ: z,
     spawnDirIndex: dirIndex,
     deadTimer: 0,
+    awaitingTrailClear: false,
   };
   entity.trailSamples.push({ ownerId: entity.id, owner: isPlayer ? 'player' : 'bot', x, z, bornAt: state.survived });
   syncEntityTrailColor(entity);
@@ -496,6 +499,21 @@ function entityDir(e) { return DIR[e.dirIndex]; }
 
 function trailFadeAge() {
   return Math.max(3.2, 14 - state.survived * 0.22);
+}
+
+function pruneAgedTrailSamples(entity) {
+  const fadeAge = trailFadeAge();
+  const minSamples = entity.alive ? 1 : 0;
+  let changed = false;
+
+  while (entity.trailSamples.length > minSamples) {
+    const next = entity.trailSamples[1] || entity.trailSamples[0];
+    if (state.survived - next.bornAt <= fadeAge) break;
+    entity.trailSamples.shift();
+    changed = true;
+  }
+
+  if (changed) entity.trailDirty = true;
 }
 
 function trailLife() {
@@ -781,11 +799,87 @@ function aiTurn(bot, dt) {
   }
 }
 
-function checkCollision(entity) {
-  if (Math.abs(entity.x) >= CONFIG.fieldHalf || Math.abs(entity.z) >= CONFIG.fieldHalf) return true;
-  if (trailSegmentHit(entity.x, entity.z, { ignoreEntityId: entity.id, inflate: -0.05 })) return true;
-  if (trailSegmentHit(entity.x, entity.z, { onlyEntityId: entity.id, ownRecentGrace: 0.22, inflate: -0.05 })) return true;
+function collidesAtPosition(entity, x, z) {
+  if (Math.abs(x) >= CONFIG.fieldHalf || Math.abs(z) >= CONFIG.fieldHalf) return true;
+  if (trailSegmentHit(x, z, { ignoreEntityId: entity.id, inflate: -0.05 })) return true;
+  if (trailSegmentHit(x, z, { onlyEntityId: entity.id, ownRecentGrace: 0.22, inflate: -0.05 })) return true;
   return false;
+}
+
+function checkCollision(entity, fromX, fromZ, toX, toZ) {
+  const dx = toX - fromX;
+  const dz = toZ - fromZ;
+  const dist = Math.hypot(dx, dz);
+
+  const sweepStep = Math.max(0.06, CONFIG.bikeHitRadius * 0.6);
+  const steps = Math.max(1, Math.ceil(dist / sweepStep));
+
+  for (let i = 1; i <= steps; i += 1) {
+    const t = i / steps;
+    const x = fromX + dx * t;
+    const z = fromZ + dz * t;
+    if (collidesAtPosition(entity, x, z)) return true;
+  }
+
+  return false;
+}
+
+function getBitTexture(char, color) {
+  const key = `${char}-${color}`;
+  if (gfx.bitTextures[key]) return gfx.bitTextures[key];
+
+  const bitCanvas = document.createElement('canvas');
+  bitCanvas.width = 64;
+  bitCanvas.height = 64;
+  const ctx = bitCanvas.getContext('2d');
+  if (!ctx) return null;
+
+  ctx.clearRect(0, 0, 64, 64);
+  ctx.fillStyle = color;
+  ctx.font = 'bold 44px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(char, 32, 34);
+
+  const texture = new THREE.CanvasTexture(bitCanvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  gfx.bitTextures[key] = texture;
+  return texture;
+}
+
+function emitRespawnEffect(bot) {
+  for (let i = 0; i < 34; i += 1) {
+    const texture = getBitTexture(Math.random() < 0.5 ? '0' : '1', bot.color);
+    if (!texture) continue;
+
+    const mesh = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthWrite: false,
+      opacity: 0.92,
+      color: 0xffffff,
+    }));
+
+    mesh.position.set(
+      bot.spawnX + randomIn(-2.6, 2.6),
+      randomIn(3.8, 8.5),
+      bot.spawnZ + randomIn(-2.6, 2.6),
+    );
+    const scale = randomIn(0.34, 0.72);
+    mesh.scale.set(scale, scale, 1);
+    gfx.scene.add(mesh);
+
+    state.particles.push({
+      mesh,
+      life: randomIn(0.9, 1.5),
+      vy: randomIn(-3.8, -1.8),
+      driftX: randomIn(-0.55, 0.55),
+      driftZ: randomIn(-0.55, 0.55),
+      binary: true,
+      codeBit: true,
+    });
+  }
 }
 
 function activateOverload() {
@@ -802,6 +896,7 @@ function respawnBot(bot) {
   bot.trailPendingDist = 0;
   bot.trailDirty = true;
   bot.deadTimer = 0;
+  bot.awaitingTrailClear = false;
   bot.pathMemory = [];
   bot.mesh.position.set(bot.x, 0.1, bot.z);
   bot.mesh.rotation.y = bot.dirIndex * (Math.PI / 2);
@@ -815,8 +910,11 @@ function updateEntities(dt) {
     const e = state.entities[i];
     if (!e.alive) {
       if (!e.isPlayer) {
-        e.deadTimer -= dt;
-        if (e.deadTimer <= 0) respawnBot(e);
+        pruneAgedTrailSamples(e);
+        if (e.awaitingTrailClear && e.trailSamples.length === 0) {
+          emitRespawnEffect(e);
+          respawnBot(e);
+        }
       }
       continue;
     }
@@ -834,13 +932,13 @@ function updateEntities(dt) {
     e.x += d.x * speed * dt;
     e.z += d.z * speed * dt;
 
-    if (checkCollision(e)) {
+    if (checkCollision(e, prevX, prevZ, e.x, e.z)) {
       e.alive = false;
       e.mesh.visible = false;
       if (e.isPlayer) {
         playCrashSound();
       } else {
-        e.deadTimer = randomIn(1.35, 2.4);
+        e.awaitingTrailClear = true;
       }
       continue;
     }
@@ -859,6 +957,7 @@ function updateEntities(dt) {
 
   state.trails.length = 0;
   for (const e of state.entities) {
+    pruneAgedTrailSamples(e);
     syncEntityTrailColor(e);
     for (const sample of e.trailSamples) state.trails.push(sample);
     if (e.trailDirty) rebuildTrailMesh(e);
