@@ -39,13 +39,21 @@ const CONFIG = {
   baseSpeed: 22,
   speedRamp: 0.85,
   botCount: 7,
-  trailSpacing: 0.3,
+  trailSpacing: 0.34,
   maxTrailLength: 760,
+  wallHalfWidth: 0.19,
+  bikeHitRadius: 0.24,
   nearMissDist: 2.8,
   powerupSpawnMs: 5200,
 };
 
 const BOT_COLORS = ['#ff2cc6', '#ffa24d', '#79ff7a', '#7a8dff', '#25f0ff', '#ff5a9f', '#ffd84e', '#c98dff'];
+
+function botPaletteExcluding(playerColor) {
+  const normalized = (playerColor || '').toLowerCase();
+  const filtered = BOT_COLORS.filter((c) => c.toLowerCase() !== normalized);
+  return filtered.length ? filtered : BOT_COLORS;
+}
 
 const state = {
   running: false,
@@ -95,6 +103,50 @@ function randomIn(min, max) { return Math.random() * (max - min) + min; }
 function hexToInt(hex) { return Number.parseInt(hex.replace('#', '0x'), 16); }
 function distSq2D(a, b) { const dx = a.x - b.x; const dz = a.z - b.z; return dx * dx + dz * dz; }
 
+function pointSegmentDistSq(px, pz, ax, az, bx, bz) {
+  const abx = bx - ax;
+  const abz = bz - az;
+  const denom = abx * abx + abz * abz;
+  if (denom <= 0.000001) {
+    const dx = px - ax;
+    const dz = pz - az;
+    return dx * dx + dz * dz;
+  }
+  const t = Math.max(0, Math.min(1, ((px - ax) * abx + (pz - az) * abz) / denom));
+  const qx = ax + abx * t;
+  const qz = az + abz * t;
+  const dx = px - qx;
+  const dz = pz - qz;
+  return dx * dx + dz * dz;
+}
+
+function trailSegmentHit(x, z, opts = {}) {
+  const {
+    ignoreEntityId = null,
+    onlyEntityId = null,
+    ownRecentGrace = 0,
+    inflate = 0,
+  } = opts;
+
+  const hitR = CONFIG.wallHalfWidth + CONFIG.bikeHitRadius + inflate;
+  const hitSq = hitR * hitR;
+
+  for (const owner of state.entities) {
+    if (!owner) continue;
+    if (onlyEntityId !== null && owner.id !== onlyEntityId) continue;
+    if (ignoreEntityId !== null && owner.id === ignoreEntityId) continue;
+
+    const samples = owner.trailSamples;
+    for (let i = 1; i < samples.length; i += 1) {
+      const a = samples[i - 1];
+      const b = samples[i];
+      if (ownRecentGrace > 0 && owner.id === onlyEntityId && state.survived - b.bornAt < ownRecentGrace) continue;
+      if (pointSegmentDistSq(x, z, a.x, a.z, b.x, b.z) < hitSq) return true;
+    }
+  }
+  return false;
+}
+
 function syncEntityTrailColor(entity) {
   if (!entity?.trailMaterial) return;
   const color = hexToInt(entity.color);
@@ -106,14 +158,16 @@ function syncEntityTrailColor(entity) {
 
 function getRenderableTrailPoints(entity) {
   const points = entity.trailSamples;
-  if (points.length <= 80) return points;
+  const n = points.length;
+  if (n <= 120) return points;
 
-  const keepRecent = 80;
-  const olderEnd = Math.max(0, points.length - keepRecent);
+  const keepRecent = 96;
+  const olderEnd = Math.max(0, n - keepRecent);
+  const stride = n > 520 ? 4 : (n > 320 ? 3 : 2);
   const reduced = [];
 
-  for (let i = 0; i < olderEnd; i += 2) reduced.push(points[i]);
-  for (let i = olderEnd; i < points.length; i += 1) reduced.push(points[i]);
+  for (let i = 0; i < olderEnd; i += stride) reduced.push(points[i]);
+  for (let i = olderEnd; i < n; i += 1) reduced.push(points[i]);
   return reduced;
 }
 
@@ -225,9 +279,9 @@ function createEntity(isPlayer, color, x, z, dirIndex) {
     trailGeometry: new THREE.BufferGeometry(),
     trailMaterial: new THREE.MeshBasicMaterial({
       color: hexToInt(color),
-      transparent: true,
-      opacity: 0.9,
-      depthWrite: false,
+      transparent: false,
+      opacity: 1,
+      depthWrite: true,
       side: THREE.DoubleSide,
     }),
     trailMesh: null,
@@ -256,7 +310,7 @@ function rebuildTrailMesh(entity) {
   const baseY = 0.06;
   const wallHeight = 0.72;
   const topY = baseY + wallHeight;
-  const wallWidth = 0.05;
+  const wallWidth = CONFIG.wallHalfWidth;
   const positions = [];
   const indices = [];
 
@@ -274,11 +328,11 @@ function rebuildTrailMesh(entity) {
     const px = points[i].x;
     const pz = points[i].z;
 
-    // single wall ribbon, slightly widened for visibility
-    positions.push(px, baseY, pz);
-    positions.push(px + nx, baseY, pz + nz);
-    positions.push(px, topY, pz);
-    positions.push(px + nx, topY, pz + nz);
+    // One centered thick wall volume (not two separate walls)
+    positions.push(px - nx, baseY, pz - nz); // left bottom
+    positions.push(px + nx, baseY, pz + nz); // right bottom
+    positions.push(px - nx, topY, pz - nz);  // left top
+    positions.push(px + nx, topY, pz + nz);  // right top
 
     if (i < points.length - 1) {
       const a = i * 4;
@@ -289,6 +343,10 @@ function rebuildTrailMesh(entity) {
       const f = a + 5;
       const g = a + 6;
       const h = a + 7;
+
+      // top bridge keeps wall visible head-on
+      indices.push(c, d, g, d, h, g);
+      // side faces
       indices.push(a, c, e, c, g, e);
       indices.push(b, f, d, d, f, h);
     }
@@ -366,9 +424,10 @@ function resetGame() {
     [-108, 0, 0],
   ];
 
+  const palette = botPaletteExcluding(state.selectedTrail.color);
   for (let i = 0; i < CONFIG.botCount; i += 1) {
     const [x, z, d] = botSpawns[i % botSpawns.length];
-    state.entities.push(createEntity(false, BOT_COLORS[i % BOT_COLORS.length], x, z, d));
+    state.entities.push(createEntity(false, palette[i % palette.length], x, z, d));
   }
 
   updateUi();
@@ -461,28 +520,16 @@ function estimateDanger(x, z, dirIndex, entityId) {
     const nx = x + d.x * step * 2;
     const nz = z + d.z * step * 2;
     if (Math.abs(nx) > CONFIG.fieldHalf - 2 || Math.abs(nz) > CONFIG.fieldHalf - 2) penalty += 24;
-    for (const t of state.trails) {
-      if (t.ownerId === entityId && state.survived - t.bornAt < 1.3) continue;
-      const life = trailLife(t);
-      if (life <= 0.15) continue;
-      const dd = (nx - t.x) ** 2 + (nz - t.z) ** 2;
-      const radius = 0.6 + life * 0.9;
-      if (dd < radius * radius) penalty += t.ownerId === entityId ? 28 : 16;
-    }
+    if (trailSegmentHit(nx, nz, { ignoreEntityId: entityId, inflate: -0.05 })) penalty += 16;
+    if (trailSegmentHit(nx, nz, { onlyEntityId: entityId, ownRecentGrace: 1.3, inflate: -0.05 })) penalty += 28;
   }
   return penalty;
 }
 
 function pointBlocked(x, z, entityId) {
-  if (Math.abs(x) >= CONFIG.fieldHalf - 1 || Math.abs(z) >= CONFIG.fieldHalf - 1) return true
-  for (const t of state.trails) {
-    if (t.ownerId === entityId && state.survived - t.bornAt < 1.2) continue;
-    const life = trailLife(t);
-    if (life <= 0.18) continue;
-    const r = 0.55 + life * 0.95;
-    if ((x - t.x) ** 2 + (z - t.z) ** 2 < r * r) return true;
-  }
-  return false;
+  if (Math.abs(x) >= CONFIG.fieldHalf - 1 || Math.abs(z) >= CONFIG.fieldHalf - 1) return true;
+  return trailSegmentHit(x, z, { ignoreEntityId: entityId, inflate: -0.06 })
+    || trailSegmentHit(x, z, { onlyEntityId: entityId, ownRecentGrace: 1.2, inflate: -0.06 });
 }
 
 function projectedFreeSpace(bot, optDir) {
@@ -599,7 +646,6 @@ function optionTowardTarget(bot, target) {
 
 function willHitOwnTrailSoon(bot, dirIndex, horizon = 18) {
   const d = DIR[dirIndex];
-  const speed = (CONFIG.baseSpeed + state.survived * CONFIG.speedRamp) * state.speedMul;
   const stride = 1.6;
   const steps = Math.max(6, Math.floor(horizon / stride));
 
@@ -608,15 +654,7 @@ function willHitOwnTrailSoon(bot, dirIndex, horizon = 18) {
     const nz = bot.z + d.z * i * stride;
 
     if (Math.abs(nx) >= CONFIG.fieldHalf - 1.4 || Math.abs(nz) >= CONFIG.fieldHalf - 1.4) return true;
-
-    for (const t of state.trails) {
-      if (t.ownerId !== bot.id) continue;
-      if (state.survived - t.bornAt < 1.1) continue;
-      const life = trailLife(t);
-      if (life <= 0.12) continue;
-      const r = 0.35 + life * 0.9;
-      if ((nx - t.x) ** 2 + (nz - t.z) ** 2 < r * r) return true;
-    }
+    if (trailSegmentHit(nx, nz, { onlyEntityId: bot.id, ownRecentGrace: 1.1, inflate: -0.05 })) return true;
   }
 
   return false;
@@ -688,13 +726,8 @@ function aiTurn(bot, dt) {
 
 function checkCollision(entity) {
   if (Math.abs(entity.x) >= CONFIG.fieldHalf || Math.abs(entity.z) >= CONFIG.fieldHalf) return true;
-  for (const t of state.trails) {
-    if (t.ownerId === entity.id && state.survived - t.bornAt < 0.22) continue;
-    const life = trailLife(t);
-    if (life <= 0.12) continue;
-    const radius = 0.3 + life * 0.9;
-    if (distSq2D(entity, t) < radius * radius) return true;
-  }
+  if (trailSegmentHit(entity.x, entity.z, { ignoreEntityId: entity.id, inflate: -0.05 })) return true;
+  if (trailSegmentHit(entity.x, entity.z, { onlyEntityId: entity.id, ownRecentGrace: 0.22, inflate: -0.05 })) return true;
   return false;
 }
 
@@ -741,7 +774,7 @@ function updateEntities(dt) {
     }
   }
 
-  state.trails = [];
+  state.trails.length = 0;
   for (const e of state.entities) {
     syncEntityTrailColor(e);
     for (const sample of e.trailSamples) state.trails.push(sample);
