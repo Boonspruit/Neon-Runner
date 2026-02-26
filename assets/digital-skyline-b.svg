@@ -1,0 +1,16 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='2048' height='512' viewBox='0 0 2048 512'>
+  <rect width='2048' height='512' fill='#060816'/>
+  <g stroke='#2af3ff' stroke-opacity='0.7' fill='none' stroke-width='2'>
+    <path d='M0 430 L90 430 L90 300 L150 300 L150 360 L230 360 L230 250 L320 250 L320 430 L420 430 L420 280 L500 280 L500 410 L610 410 L610 240 L700 240 L700 430 L820 430 L820 310 L900 310 L900 430 L1030 430 L1030 220 L1120 220 L1120 360 L1200 360 L1200 430 L1320 430 L1320 260 L1420 260 L1420 430 L1540 430 L1540 290 L1620 290 L1620 430 L1750 430 L1750 235 L1830 235 L1830 430 L1940 430 L1940 275 L2048 275' />
+  </g>
+  <g fill='#4dfdff' fill-opacity='0.2'>
+    <rect x='108' y='322' width='8' height='12'/><rect x='126' y='322' width='8' height='12'/>
+    <rect x='246' y='272' width='8' height='12'/><rect x='266' y='272' width='8' height='12'/>
+    <rect x='445' y='312' width='8' height='12'/><rect x='467' y='312' width='8' height='12'/>
+  </g>
+  <g fill='#4dfdff' fill-opacity='0.6'>
+    <rect x='1046' y='258' width='8' height='12'/><rect x='1068' y='258' width='8' height='12'/>
+    <rect x='1340' y='300' width='8' height='12'/><rect x='1362' y='300' width='8' height='12'/>
+    <rect x='1768' y='275' width='8' height='12'/><rect x='1792' y='275' width='8' height='12'/>
+  </g>
+</svg>
