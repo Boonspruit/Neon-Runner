@@ -10,6 +10,8 @@ const APP_ASSETS = [
   'ai-worker.js',
   'assets/synthwave-loop.mp3',
   'assets/effects-atlas.svg',
+  'assets/digital-skyline-b.svg',
+  'assets/digital-skyline-a.svg',
 ];
 
 const EXTERNAL_ASSETS = [

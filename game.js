@@ -199,7 +199,9 @@ const gfx = {
   sparkGeo: null,
   bitTextures: {},
   atlasTexture: null,
-  glowMaterial: null,
+  skylineTextures: [],
+  skylinePlane: null,
+  skylineFlickerMs: 0,
 };
 
 function randomIn(min, max) { return Math.random() * (max - min) + min; }
@@ -299,17 +301,35 @@ function initEffectsAtlas() {
   gfx.atlasTexture.wrapS = THREE.ClampToEdgeWrapping;
   gfx.atlasTexture.wrapT = THREE.ClampToEdgeWrapping;
 
-  const glowTexture = makeAtlasSubTexture(0, 0, 0.5, 1);
-  if (glowTexture) {
-    gfx.glowMaterial = new THREE.SpriteMaterial({
-      map: glowTexture,
-      transparent: true,
-      depthWrite: false,
-      opacity: 0.75,
-      color: 0xffffff,
-      blending: THREE.AdditiveBlending,
-    });
-  }
+}
+
+
+function initSkylineBackdrop() {
+  const loader = new THREE.TextureLoader();
+  const texA = loader.load('assets/digital-skyline-a.svg');
+  const texB = loader.load('assets/digital-skyline-b.svg');
+  [texA, texB].forEach((tex) => {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.repeat.set(2, 1);
+  });
+  gfx.skylineTextures = [texA, texB];
+
+  const mat = new THREE.MeshBasicMaterial({
+    map: texA,
+    transparent: true,
+    opacity: 0.52,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+  });
+  const geo = new THREE.CylinderGeometry(CONFIG.fieldHalf + 20, CONFIG.fieldHalf + 20, 36, 48, 1, true);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.y = 8.5;
+  mesh.rotation.y = Math.PI * 0.25;
+  gfx.scene.add(mesh);
+  gfx.skylinePlane = mesh;
 }
 
 function setupThree() {
@@ -330,6 +350,7 @@ function setupThree() {
   }
 
   initEffectsAtlas();
+  initSkylineBackdrop();
 
   const hemi = new THREE.HemisphereLight(0x70f3ff, 0x060812, 0.78);
   const key = new THREE.DirectionalLight(0x96ddff, 1.1);
@@ -403,13 +424,6 @@ function createBike(color) {
   frontWheel.rotation.z = Math.PI / 2;
   frontWheel.position.set(0, 0.2, -0.95);
   const rearWheel = frontWheel.clone(); rearWheel.position.z = 0.95;
-  if (gfx.glowMaterial) {
-    const glow = new THREE.Sprite(gfx.glowMaterial.clone());
-    glow.scale.set(3.3, 3.3, 1);
-    glow.position.set(0, 0.4, 0);
-    glow.material.opacity = 0.42;
-    bike.add(glow);
-  }
   bike.add(body, windshield, frontWheel, rearWheel);
   return bike;
 }
@@ -431,12 +445,16 @@ function createEntity(isPlayer, color, x, z, dirIndex) {
     trailTick: 0,
     trailSamples: [],
     trailGeometry: new THREE.BufferGeometry(),
-    trailMaterial: new THREE.MeshBasicMaterial({
+    trailMaterial: new THREE.MeshStandardMaterial({
       color: hexToInt(color),
+      emissive: hexToInt(color),
+      emissiveIntensity: 0.18,
       transparent: false,
       opacity: 1,
       depthWrite: true,
       side: THREE.DoubleSide,
+      roughness: 0.7,
+      metalness: 0.05,
     }),
     trailMesh: null,
     trailPendingDist: 0,
@@ -1535,6 +1553,18 @@ function renderLeaderboard() {
 function render() {
   const pulse = 0.2 + Math.sin(state.survived * 2.5) * 0.06;
   gfx.floor.material.emissiveIntensity = pulse;
+
+  if (gfx.skylinePlane && gfx.skylineTextures.length === 2) {
+    gfx.skylineFlickerMs -= 16;
+    if (gfx.skylineFlickerMs <= 0) {
+      const flickerOn = Math.random() > 0.45;
+      gfx.skylinePlane.material.map = flickerOn ? gfx.skylineTextures[0] : gfx.skylineTextures[1];
+      gfx.skylinePlane.material.opacity = flickerOn ? 0.5 : 0.42;
+      gfx.skylinePlane.material.needsUpdate = true;
+      gfx.skylineFlickerMs = 120 + Math.random() * 380;
+    }
+  }
+
   gfx.renderer.render(gfx.scene, gfx.camera);
 }
 
