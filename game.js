@@ -91,7 +91,7 @@ const CONFIG = {
   botJoinIntervalMs: 5000,
   botRefillIntervalMs: 850,
   trailSpacing: 0.34,
-  maxTrailLength: 760,
+  maxTrailLength: 2500,
   wallHalfWidth: 0.19,
   bikeHitRadius: 0.24,
   nearMissDist: 2.8,
@@ -110,12 +110,15 @@ const CONFIG = {
   botSpeedMultiplier: 0.96,
   trailPruneMaxPerTick: 3,
   deadTrailPruneMaxPerTick: 24,
-  deadBotTrailFadeAge: 3.8,
+  deadTrailFadeAge: 3.8,
   botRespawnCenterLockMin: 0.45,
   botRespawnCenterLockMax: 0.8,
   wallTrapProximityDist: 14,
   wallTrapActivateSec: 5,
   wallTrapLeadDist: 20,
+  arenaShrinkStartSec: 30,
+  arenaShrinkPerSec: 0.12,
+  arenaMinHalf: 54,
 };
 
 const BOT_COLORS = ['#ff2cc6', '#ffa24d', '#79ff7a', '#7a8dff', '#25f0ff', '#ff5a9f', '#ffd84e', '#c98dff', '#6bffb0', '#ff8f4d', '#67d1ff', '#ff4dc4', '#b9ff4d', '#8ec5ff', '#ff6e9c', '#9ef07a', '#ffb86c', '#5af7d2', '#a08dff', '#ff7fb2', '#7df06b', '#6ec5ff', '#ff9d57', '#7affd9'];
@@ -224,6 +227,7 @@ const state = {
   recentBotSpawns: [],
   wallPressureTime: 0,
   wallTrap: { active: false, flankerId: null, sealerId: null, context: null },
+  arenaHalf: CONFIG.fieldHalf,
 };
 
 const audio = {
@@ -241,8 +245,10 @@ const gfx = {
   scene: null,
   camera: null,
   floor: null,
+  grid: null,
   trailGeo: null,
   sparkGeo: null,
+  walls: null,
   bitTextures: {},
   atlasTexture: null,
   skylineTextures: [],
@@ -397,6 +403,7 @@ function initSkylineBackdrop() {
     const wall = new THREE.Mesh(planeGeo, mat);
     wall.position.set(cfg.x, wallHeight * 0.46, cfg.z);
     wall.rotation.y = cfg.rotY;
+    wall.userData = { axis: cfg.axis, far: cfg.far, baseWidth: cfg.width };
     gfx.scene.add(wall);
     gfx.skylineWalls.push(wall);
 
@@ -464,28 +471,32 @@ function setupThree() {
   );
   floor.rotation.x = -Math.PI / 2;
   floor.position.y = -0.72;
-  floor.matrixAutoUpdate = false;
-  floor.updateMatrix();
+  floor.userData.baseHalf = CONFIG.fieldHalf;
   gfx.scene.add(floor);
   gfx.floor = floor;
 
   const grid = new THREE.GridHelper(CONFIG.fieldHalf * 2, CONFIG.fieldHalf, 0x205f8f, 0x13344d);
   grid.position.y = -0.7;
-  grid.matrixAutoUpdate = false;
-  grid.updateMatrix();
+  grid.userData.baseHalf = CONFIG.fieldHalf;
   gfx.scene.add(grid);
+  gfx.grid = grid;
 
 
 
   const wallMat = neonMaterial('#20abcf', 0.52);
+  wallMat.userData = { baseEmissive: wallMat.emissiveIntensity || 0.52 };
   const longWall = new THREE.BoxGeometry(CONFIG.fieldHalf * 2 + 0.8, 5.2, 0.8);
   const sideWall = new THREE.BoxGeometry(0.8, 5.2, CONFIG.fieldHalf * 2 + 0.8);
   const top = new THREE.Mesh(longWall, wallMat); top.position.set(0, 1.8, -CONFIG.fieldHalf);
   const bottom = top.clone(); bottom.position.z = CONFIG.fieldHalf;
   const left = new THREE.Mesh(sideWall, wallMat); left.position.set(-CONFIG.fieldHalf, 1.8, 0);
   const right = left.clone(); right.position.x = CONFIG.fieldHalf;
-  [top, bottom, left, right].forEach((wall) => { wall.matrixAutoUpdate = false; wall.updateMatrix(); });
-  gfx.scene.add(top, bottom, left, right);
+    gfx.scene.add(top, bottom, left, right);
+  gfx.walls = { top, bottom, left, right };
+  for (const wall of Object.values(gfx.walls)) {
+    wall.userData.basePos = wall.position.clone();
+    wall.userData.baseHalf = CONFIG.fieldHalf;
+  }
 
   gfx.trailGeo = new THREE.BoxGeometry(1, 0.75, 1);
   gfx.sparkGeo = new THREE.SphereGeometry(0.14, 6, 6);
@@ -659,9 +670,7 @@ function addTrailSample(entity, x, z) {
     bornAt: state.survived,
   };
   entity.trailSamples.push(sample);
-  if (entity.trailSamples.length > CONFIG.maxTrailLength) {
-    entity.trailSamples.shift();
-  }
+  if (entity.trailSamples.length > CONFIG.maxTrailLength) entity.trailSamples.shift();
   entity.trailDirty = true;
 }
 
@@ -723,7 +732,7 @@ function resetGame() {
   Object.assign(state, {
     running: false, survived: 0, score: 0, speedMul: 1, closeCallMultiplier: 1, nearMissCooldown: 0,
     phaseGhostTimer: 0, phaseGhostHits: 0, overloadTimer: 0, overloadCooldown: 0,
-    nextPowerupMs: CONFIG.powerupSpawnMs, nextEntityId: 1, nextBotJoinMs: CONFIG.botJoinIntervalMs, nextBotRefillMs: 0, botSpawnCursor: 0, pixelTimer: 0, recentBotSpawns: [], wallPressureTime: 0, wallTrap: { active: false, flankerId: null, sealerId: null, context: null },
+    nextPowerupMs: CONFIG.powerupSpawnMs, nextEntityId: 1, nextBotJoinMs: CONFIG.botJoinIntervalMs, nextBotRefillMs: 0, botSpawnCursor: 0, pixelTimer: 0, recentBotSpawns: [], wallPressureTime: 0, wallTrap: { active: false, flankerId: null, sealerId: null, context: null }, arenaHalf: CONFIG.fieldHalf,
   });
 
   const openingSpawns = centerWallSpawnPoints();
@@ -745,6 +754,10 @@ function resetGame() {
 
 function player() { return state.entities[0]; }
 function entityDir(e) { return DIR[e.dirIndex]; }
+
+function arenaHalf() {
+  return Math.max(CONFIG.arenaMinHalf || 0, state.arenaHalf || CONFIG.fieldHalf);
+}
 
 function desiredAliveBots() {
   const growth = Math.floor(state.survived / CONFIG.botGrowthIntervalSec);
@@ -782,15 +795,8 @@ function rememberBotSpawn(x, z) {
 }
 
 function trailFadeAge(entity = null) {
-  const base = Math.max(12, 44 - state.survived * 0.16);
-  if (!entity) return base;
-  if (!entity.isPlayer && !entity.alive) {
-    return CONFIG.deadBotTrailFadeAge;
-  }
-  if (!entity.isPlayer) {
-    return Math.max(7.5, base * 0.78);
-  }
-  return base;
+  if (!entity || entity.alive) return Infinity;
+  return CONFIG.deadTrailFadeAge;
 }
 
 function pruneAgedTrailSamples(entity) {
@@ -895,7 +901,7 @@ function estimateDanger(x, z, dirIndex, entityId) {
   for (let step = 1; step <= 9; step += 1) {
     const nx = x + d.x * step * 2;
     const nz = z + d.z * step * 2;
-    if (Math.abs(nx) > CONFIG.fieldHalf - 2 || Math.abs(nz) > CONFIG.fieldHalf - 2) penalty += 24;
+    if (Math.abs(nx) > arenaHalf() - 2 || Math.abs(nz) > arenaHalf() - 2) penalty += 24;
     if (trailSegmentHit(nx, nz, { ignoreEntityId: entityId, inflate: -0.05 })) penalty += 16;
     if (trailSegmentHit(nx, nz, { onlyEntityId: entityId, ownRecentGrace: 1.3, inflate: -0.05 })) penalty += 28;
   }
@@ -903,7 +909,7 @@ function estimateDanger(x, z, dirIndex, entityId) {
 }
 
 function pointBlocked(x, z, entityId) {
-  if (Math.abs(x) >= CONFIG.fieldHalf - 1 || Math.abs(z) >= CONFIG.fieldHalf - 1) return true;
+  if (Math.abs(x) >= arenaHalf() - 1 || Math.abs(z) >= arenaHalf() - 1) return true;
   return trailSegmentHit(x, z, { ignoreEntityId: entityId, inflate: -0.06 })
     || trailSegmentHit(x, z, { onlyEntityId: entityId, ownRecentGrace: 1.2, inflate: -0.06 });
 }
@@ -1027,8 +1033,8 @@ function optionTowardPoint(bot, point) {
 }
 
 function perimeterContextForPlayer(p) {
-  const wallDistX = CONFIG.fieldHalf - Math.abs(p.x);
-  const wallDistZ = CONFIG.fieldHalf - Math.abs(p.z);
+  const wallDistX = arenaHalf() - Math.abs(p.x);
+  const wallDistZ = arenaHalf() - Math.abs(p.z);
   const wallDist = Math.min(wallDistX, wallDistZ);
   if (wallDist > CONFIG.wallTrapProximityDist) return null;
 
@@ -1041,8 +1047,8 @@ function perimeterContextForPlayer(p) {
 function wallTrapTargets(bot, target, context) {
   const pd = entityDir(target);
   const lead = CONFIG.wallTrapLeadDist;
-  const wallEdge = CONFIG.fieldHalf - 2.2;
-  const sealInset = CONFIG.fieldHalf - 8.5;
+  const wallEdge = arenaHalf() - 2.2;
+  const sealInset = arenaHalf() - 8.5;
 
   let flanker = { x: target.x + pd.x * lead, z: target.z + pd.z * lead };
   let sealer = { x: target.x + pd.x * (lead * 0.55), z: target.z + pd.z * (lead * 0.55) };
@@ -1057,10 +1063,10 @@ function wallTrapTargets(bot, target, context) {
     if (Math.abs(pd.x) < 0.1) sealer.x += (bot.flankPreference || 1) * 12;
   }
 
-  flanker.x = Math.max(-CONFIG.fieldHalf + 2, Math.min(CONFIG.fieldHalf - 2, flanker.x));
-  flanker.z = Math.max(-CONFIG.fieldHalf + 2, Math.min(CONFIG.fieldHalf - 2, flanker.z));
-  sealer.x = Math.max(-CONFIG.fieldHalf + 3.5, Math.min(CONFIG.fieldHalf - 3.5, sealer.x));
-  sealer.z = Math.max(-CONFIG.fieldHalf + 3.5, Math.min(CONFIG.fieldHalf - 3.5, sealer.z));
+  flanker.x = Math.max(-arenaHalf() + 2, Math.min(arenaHalf() - 2, flanker.x));
+  flanker.z = Math.max(-arenaHalf() + 2, Math.min(arenaHalf() - 2, flanker.z));
+  sealer.x = Math.max(-arenaHalf() + 3.5, Math.min(arenaHalf() - 3.5, sealer.x));
+  sealer.z = Math.max(-arenaHalf() + 3.5, Math.min(arenaHalf() - 3.5, sealer.z));
   return { flanker, sealer };
 }
 
@@ -1115,7 +1121,7 @@ function centerBiasDir(x, z) {
 }
 
 function spawnPointIsSafe(x, z, dirIndex, minGap = CONFIG.botSpawnMinGap, recentGap = CONFIG.recentSpawnAvoidRadius, requireUnique = false) {
-  if (Math.abs(x) >= CONFIG.fieldHalf - 2 || Math.abs(z) >= CONFIG.fieldHalf - 2) return false;
+  if (Math.abs(x) >= arenaHalf() - 2 || Math.abs(z) >= arenaHalf() - 2) return false;
   const minDistSq = minGap * minGap;
   for (const e of state.entities) {
     if (!e?.alive) continue;
@@ -1129,7 +1135,7 @@ function spawnPointIsSafe(x, z, dirIndex, minGap = CONFIG.botSpawnMinGap, recent
   for (const step of [2.4, 4.8, 7.2]) {
     const nx = x + d.x * step;
     const nz = z + d.z * step;
-    if (Math.abs(nx) >= CONFIG.fieldHalf - 1 || Math.abs(nz) >= CONFIG.fieldHalf - 1) return false;
+    if (Math.abs(nx) >= arenaHalf() - 1 || Math.abs(nz) >= arenaHalf() - 1) return false;
     if (pointBlocked(nx, nz, null)) return false;
   }
   return true;
@@ -1148,7 +1154,7 @@ function pickBotSpawn(preferredIndex = 0, options = {}) {
     }
   }
 
-  const range = CONFIG.fieldHalf - 10;
+  const range = arenaHalf() - 10;
   for (let i = 0; i < 24; i += 1) {
     const x = randomIn(-range, range);
     const z = randomIn(-range, range);
@@ -1245,7 +1251,7 @@ function willHitOwnTrailSoon(bot, dirIndex, horizon = 18) {
     const nx = bot.x + d.x * i * stride;
     const nz = bot.z + d.z * i * stride;
 
-    if (Math.abs(nx) >= CONFIG.fieldHalf - 1.4 || Math.abs(nz) >= CONFIG.fieldHalf - 1.4) return true;
+    if (Math.abs(nx) >= arenaHalf() - 1.4 || Math.abs(nz) >= arenaHalf() - 1.4) return true;
     if (trailSegmentHit(nx, nz, { onlyEntityId: bot.id, ownRecentGrace: 1.1, inflate: -0.05 })) return true;
   }
 
@@ -1298,7 +1304,7 @@ function wallPressureCutoffTurn(bot, target) {
 
   // Only force a cutoff when both are advancing toward a nearby outer wall.
   const sameHeading = DIR[bot.dirIndex].x * pd.x + DIR[bot.dirIndex].z * pd.z > 0.85;
-  const playerWallDist = CONFIG.fieldHalf - Math.max(Math.abs(target.x), Math.abs(target.z));
+  const playerWallDist = arenaHalf() - Math.max(Math.abs(target.x), Math.abs(target.z));
   if (!sameHeading || aheadDist < 6 || aheadDist > 56 || playerWallDist > 34 || Math.abs(lateral) > 24) return null;
 
   if (Math.abs(pd.x) > 0) return lateral >= 0 ? 2 : 0;
@@ -1367,15 +1373,15 @@ function shouldWallSacrifice(bot, target) {
   const aheadDist = relX * pd.x + relZ * pd.z;
   if (aheadDist < 10 || aheadDist > 80) return false;
 
-  const playerWallDist = CONFIG.fieldHalf - Math.max(Math.abs(target.x), Math.abs(target.z));
+  const playerWallDist = arenaHalf() - Math.max(Math.abs(target.x), Math.abs(target.z));
   return playerWallDist < 26;
 }
 
 function wallCrashDirFromPosition(bot, target) {
-  const dxNeg = bot.x + CONFIG.fieldHalf;
-  const dxPos = CONFIG.fieldHalf - bot.x;
-  const dzNeg = bot.z + CONFIG.fieldHalf;
-  const dzPos = CONFIG.fieldHalf - bot.z;
+  const dxNeg = bot.x + arenaHalf();
+  const dxPos = arenaHalf() - bot.x;
+  const dzNeg = bot.z + arenaHalf();
+  const dzPos = arenaHalf() - bot.z;
 
   const options = [
     { dir: 3, dist: dxNeg },
@@ -1394,7 +1400,7 @@ function wallCrashDirFromPosition(bot, target) {
 
 function shouldForceWallKamikaze(bot, target) {
   if (!target?.alive || bot.isPlayer) return false;
-  const playerWallDist = CONFIG.fieldHalf - Math.max(Math.abs(target.x), Math.abs(target.z));
+  const playerWallDist = arenaHalf() - Math.max(Math.abs(target.x), Math.abs(target.z));
   if (playerWallDist > 20) return false;
 
   const nearest = state.entities
@@ -1556,7 +1562,7 @@ function aiTurn(bot, dt) {
 }
 
 function collidesAtPosition(entity, x, z) {
-  if (Math.abs(x) >= CONFIG.fieldHalf || Math.abs(z) >= CONFIG.fieldHalf) return true;
+  if (Math.abs(x) >= arenaHalf() || Math.abs(z) >= arenaHalf()) return true;
   if (trailSegmentHit(x, z, { ignoreEntityId: entity.id, inflate: -0.05 })) return true;
   if (trailSegmentHit(x, z, { onlyEntityId: entity.id, ownRecentGrace: 0.38, inflate: -0.05 })) return true;
   return false;
@@ -1806,11 +1812,78 @@ function updateCamera(dt) {
   gfx.camera.lookAt(target);
 }
 
+function updateArenaBounds(dt) {
+  const shrinkStart = CONFIG.arenaShrinkStartSec;
+  const shrinking = state.survived > shrinkStart;
+  if (shrinking) {
+    const nextHalf = state.arenaHalf - CONFIG.arenaShrinkPerSec * dt;
+    state.arenaHalf = Math.max(CONFIG.arenaMinHalf, nextHalf);
+  }
+
+  const half = arenaHalf();
+  const shrinkRatio = 1 - ((CONFIG.fieldHalf - half) / Math.max(1, (CONFIG.fieldHalf - CONFIG.arenaMinHalf)));
+
+  if (gfx.floor) {
+    const base = gfx.floor.userData.baseHalf || CONFIG.fieldHalf;
+    const scale = half / base;
+    gfx.floor.scale.set(scale, 1, scale);
+  }
+  if (gfx.grid) {
+    const base = gfx.grid.userData.baseHalf || CONFIG.fieldHalf;
+    const scale = half / base;
+    gfx.grid.scale.set(scale, 1, scale);
+  }
+
+  if (gfx.skylineWalls?.length) {
+    for (const wall of gfx.skylineWalls) {
+      const axis = wall.userData.axis;
+      const far = wall.userData.far;
+      const widthScale = half / CONFIG.fieldHalf;
+      if (axis === 'x') {
+        wall.position.z = far * (half + 1.0);
+      } else {
+        wall.position.x = far * (half + 1.0);
+      }
+      wall.scale.x = widthScale;
+    }
+  }
+
+  if (!gfx.walls) return;
+  gfx.walls.top.position.z = -half;
+  gfx.walls.bottom.position.z = half;
+  gfx.walls.left.position.x = -half;
+  gfx.walls.right.position.x = half;
+
+  const wallLenScale = half / CONFIG.fieldHalf;
+  gfx.walls.top.scale.x = wallLenScale;
+  gfx.walls.bottom.scale.x = wallLenScale;
+  gfx.walls.left.scale.z = wallLenScale;
+  gfx.walls.right.scale.z = wallLenScale;
+
+  const pulse = shrinking ? (0.5 + 0.5 * Math.sin(state.survived * 7.6)) : 0;
+  const glowBoost = shrinking ? (1 - shrinkRatio) * 1.05 + pulse * 0.42 : 0;
+  const warningMix = shrinking ? Math.max(0, pulse - 0.35) / 0.65 : 0;
+  for (const wall of Object.values(gfx.walls)) {
+    const mat = wall.material;
+    const baseEmissive = mat?.userData?.baseEmissive || 0.52;
+    if (mat?.emissiveIntensity !== undefined) {
+      mat.emissiveIntensity = baseEmissive + glowBoost;
+    }
+    if (mat?.color && mat?.emissive) {
+      const warnColor = new THREE.Color(0xff4f8f);
+      const baseColor = new THREE.Color(0x20abcf);
+      mat.color.copy(baseColor).lerp(warnColor, warningMix * 0.55);
+      mat.emissive.copy(baseColor).lerp(warnColor, warningMix * 0.72);
+    }
+  }
+}
+
 function updateGame(dt) {
   const p = player();
   if (!p?.alive) return;
 
   state.survived += dt;
+  updateArenaBounds(dt);
   for (const [requestId, pending] of state.aiPending) {
     if (pending.expiresAt < state.survived) state.aiPending.delete(requestId);
   }
