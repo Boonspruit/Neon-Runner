@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="512" viewBox="0 0 1024 512">
+  <defs>
+    <radialGradient id="glowMain" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#d9ffff" stop-opacity="0.95"/>
+      <stop offset="30%" stop-color="#6efbff" stop-opacity="0.75"/>
+      <stop offset="70%" stop-color="#18f3ff" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#18f3ff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="softBlur"><feGaussianBlur stdDeviation="2"/></filter>
+    <style>
+      .glyph{font:700 88px 'DejaVu Sans Mono', monospace; text-anchor:middle; dominant-baseline:middle; fill:#fff; filter:url(#softBlur)}
+    </style>
+  </defs>
+
+  <rect width="1024" height="512" fill="transparent"/>
+
+  <!-- Left half: reusable neon glow texture -->
+  <circle cx="256" cy="256" r="230" fill="url(#glowMain)"/>
+  <circle cx="256" cy="256" r="72" fill="#f8ffff" opacity="0.35"/>
+
+  <!-- Right half: 4x2 glyph atlas cells (128x128) starting at x=512,y=128 -->
+  <g transform="translate(512,128)">
+    <g>
+      <rect x="0" y="0" width="128" height="128" fill="none"/>
+      <circle cx="64" cy="64" r="45" fill="#17f2ff" opacity="0.22"/>
+      <text x="64" y="66" class="glyph">0</text>
+    </g>
+    <g transform="translate(128,0)">
+      <rect x="0" y="0" width="128" height="128" fill="none"/>
+      <circle cx="64" cy="64" r="45" fill="#ff2cc6" opacity="0.22"/>
+      <text x="64" y="66" class="glyph">0</text>
+    </g>
+    <g transform="translate(256,0)">
+      <rect x="0" y="0" width="128" height="128" fill="none"/>
+      <circle cx="64" cy="64" r="45" fill="#a5ff32" opacity="0.22"/>
+      <text x="64" y="66" class="glyph">0</text>
+    </g>
+    <g transform="translate(384,0)">
+      <rect x="0" y="0" width="128" height="128" fill="none"/>
+      <circle cx="64" cy="64" r="45" fill="#ffbb33" opacity="0.22"/>
+      <text x="64" y="66" class="glyph">0</text>
+    </g>
+
+    <g transform="translate(0,128)">
+      <rect x="0" y="0" width="128" height="128" fill="none"/>
+      <circle cx="64" cy="64" r="45" fill="#17f2ff" opacity="0.22"/>
+      <text x="64" y="66" class="glyph">1</text>
+    </g>
+    <g transform="translate(128,128)">
+      <rect x="0" y="0" width="128" height="128" fill="none"/>
+      <circle cx="64" cy="64" r="45" fill="#ff2cc6" opacity="0.22"/>
+      <text x="64" y="66" class="glyph">1</text>
+    </g>
+    <g transform="translate(256,128)">
+      <rect x="0" y="0" width="128" height="128" fill="none"/>
+      <circle cx="64" cy="64" r="45" fill="#a5ff32" opacity="0.22"/>
+      <text x="64" y="66" class="glyph">1</text>
+    </g>
+    <g transform="translate(384,128)">
+      <rect x="0" y="0" width="128" height="128" fill="none"/>
+      <circle cx="64" cy="64" r="45" fill="#ffbb33" opacity="0.22"/>
+      <text x="64" y="66" class="glyph">1</text>
+    </g>
+  </g>
+</svg>
