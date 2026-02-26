@@ -80,10 +80,13 @@ const TRAIL_STYLES = [
 const CONFIG = {
   fieldHalf: 110,
   baseSpeed: 22,
-  speedRamp: 0.85,
-  botCount: 7,
-  maxBots: 20,
-  botJoinIntervalMs: 5500,
+  speedRamp: 0,
+  botCount: 8,
+  maxBots: 14,
+  maxBotEntities: 20,
+  minAliveBots: 6,
+  botJoinIntervalMs: 5000,
+  botRefillIntervalMs: 850,
   trailSpacing: 0.34,
   maxTrailLength: 760,
   wallHalfWidth: 0.19,
@@ -165,11 +168,16 @@ const state = {
   powerups: [],
   nextEntityId: 1,
   nextBotJoinMs: 0,
+  nextBotRefillMs: 0,
   botSpawnCursor: 0,
   pixelTimer: 0,
   playerName: 'Runner-01',
   bestScore: 0,
   leaderboard: [],
+  aiWorker: null,
+  aiWorkerReady: false,
+  aiRequestSeq: 0,
+  aiPending: new Map(),
 };
 
 const audio = {
@@ -184,15 +192,14 @@ const audio = {
 
 const gfx = {
   renderer: null,
-  composer: null,
-  bloomPass: null,
-  chromaPass: null,
   scene: null,
   camera: null,
   floor: null,
   trailGeo: null,
   sparkGeo: null,
   bitTextures: {},
+  atlasTexture: null,
+  glowMaterial: null,
 };
 
 function randomIn(min, max) { return Math.random() * (max - min) + min; }
@@ -274,6 +281,37 @@ function neonMaterial(color, emissive = 0.9) {
   });
 }
 
+function makeAtlasSubTexture(x, y, w, h) {
+  if (!gfx.atlasTexture) return null;
+  const texture = gfx.atlasTexture.clone();
+  texture.needsUpdate = true;
+  texture.repeat.set(w, h);
+  texture.offset.set(x, 1 - y - h);
+  return texture;
+}
+
+function initEffectsAtlas() {
+  const loader = new THREE.TextureLoader();
+  gfx.atlasTexture = loader.load('assets/effects-atlas.svg');
+  gfx.atlasTexture.colorSpace = THREE.SRGBColorSpace;
+  gfx.atlasTexture.magFilter = THREE.LinearFilter;
+  gfx.atlasTexture.minFilter = THREE.LinearMipMapLinearFilter;
+  gfx.atlasTexture.wrapS = THREE.ClampToEdgeWrapping;
+  gfx.atlasTexture.wrapT = THREE.ClampToEdgeWrapping;
+
+  const glowTexture = makeAtlasSubTexture(0, 0, 0.5, 1);
+  if (glowTexture) {
+    gfx.glowMaterial = new THREE.SpriteMaterial({
+      map: glowTexture,
+      transparent: true,
+      depthWrite: false,
+      opacity: 0.75,
+      color: 0xffffff,
+      blending: THREE.AdditiveBlending,
+    });
+  }
+}
+
 function setupThree() {
   gfx.scene = new THREE.Scene();
   gfx.scene.background = new THREE.Color(0x05030b);
@@ -282,12 +320,16 @@ function setupThree() {
 
   try {
     gfx.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false, powerPreference: 'high-performance' });
-    gfx.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    gfx.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     gfx.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    gfx.renderer.shadowMap.enabled = false;
+    gfx.renderer.sortObjects = false;
   } catch (error) {
     state.renderDisabled = true;
     gfx.renderer = { setSize() {}, render() {} };
   }
+
+  initEffectsAtlas();
 
   const hemi = new THREE.HemisphereLight(0x70f3ff, 0x060812, 0.78);
   const key = new THREE.DirectionalLight(0x96ddff, 1.1);
@@ -300,11 +342,15 @@ function setupThree() {
   );
   floor.rotation.x = -Math.PI / 2;
   floor.position.y = -0.72;
+  floor.matrixAutoUpdate = false;
+  floor.updateMatrix();
   gfx.scene.add(floor);
   gfx.floor = floor;
 
   const grid = new THREE.GridHelper(320, 160, 0x205f8f, 0x13344d);
   grid.position.y = -0.7;
+  grid.matrixAutoUpdate = false;
+  grid.updateMatrix();
   gfx.scene.add(grid);
 
   const wallMat = neonMaterial('#20abcf', 0.64);
@@ -314,21 +360,14 @@ function setupThree() {
   const bottom = top.clone(); bottom.position.z = CONFIG.fieldHalf;
   const left = new THREE.Mesh(sideWall, wallMat); left.position.set(-CONFIG.fieldHalf, 1, 0);
   const right = left.clone(); right.position.x = CONFIG.fieldHalf;
+  [top, bottom, left, right].forEach((wall) => { wall.matrixAutoUpdate = false; wall.updateMatrix(); });
   gfx.scene.add(top, bottom, left, right);
 
   gfx.trailGeo = new THREE.BoxGeometry(1, 0.75, 1);
   gfx.sparkGeo = new THREE.SphereGeometry(0.14, 6, 6);
 
-  if (window.THREE?.EffectComposer && window.THREE?.RenderPass && window.THREE?.UnrealBloomPass && window.THREE?.ShaderPass && window.THREE?.RGBShiftShader) {
-    gfx.composer = new THREE.EffectComposer(gfx.renderer);
-    const renderPass = new THREE.RenderPass(gfx.scene, gfx.camera);
-    gfx.bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(1, 1), 0.95, 0.7, 0.2);
-    gfx.chromaPass = new THREE.ShaderPass(THREE.RGBShiftShader);
-    gfx.chromaPass.uniforms.amount.value = 0.00095;
-    gfx.composer.addPass(renderPass);
-    gfx.composer.addPass(gfx.bloomPass);
-    gfx.composer.addPass(gfx.chromaPass);
-  }
+
+
 
   resizeRenderer();
 }
@@ -337,8 +376,6 @@ function resizeRenderer() {
   const width = canvas.clientWidth;
   const height = canvas.clientHeight;
   gfx.renderer.setSize(width, height, false);
-  if (gfx.composer) gfx.composer.setSize(width, height);
-  if (gfx.bloomPass) gfx.bloomPass.setSize(width, height);
   gfx.camera.aspect = width / Math.max(1, height);
   gfx.camera.updateProjectionMatrix();
 }
@@ -366,6 +403,13 @@ function createBike(color) {
   frontWheel.rotation.z = Math.PI / 2;
   frontWheel.position.set(0, 0.2, -0.95);
   const rearWheel = frontWheel.clone(); rearWheel.position.z = 0.95;
+  if (gfx.glowMaterial) {
+    const glow = new THREE.Sprite(gfx.glowMaterial.clone());
+    glow.scale.set(3.3, 3.3, 1);
+    glow.position.set(0, 0.4, 0);
+    glow.material.opacity = 0.42;
+    bike.add(glow);
+  }
   bike.add(body, windshield, frontWheel, rearWheel);
   return bike;
 }
@@ -398,6 +442,9 @@ function createEntity(isPlayer, color, x, z, dirIndex) {
     trailPendingDist: 0,
     trailDirty: true,
     thinkTimer: randomIn(0.05, 0.16),
+    personalityAggro: randomIn(0.85, 1.25),
+    flankPreference: Math.random() < 0.5 ? -1 : 1,
+    personalityNoise: randomIn(-14, 14),
     targetId: null,
     pathMemory: [],
     spawnX: x,
@@ -520,9 +567,12 @@ function cleanupRunObjects() {
   state.entities = []; state.trails = []; state.particles = []; state.powerups = [];
 }
 
-function spawnAdditionalBot() {
-  const botCount = state.entities.filter((e) => !e.isPlayer).length;
-  if (botCount >= CONFIG.maxBots) return;
+function spawnAdditionalBot(force = false) {
+  const bots = state.entities.filter((e) => !e.isPlayer);
+  const aliveCount = bots.filter((e) => e.alive).length;
+  const totalCount = bots.length;
+  if (totalCount >= CONFIG.maxBotEntities) return;
+  if (!force && aliveCount >= CONFIG.maxBots) return;
 
   const [x, z] = BOT_SPAWNS[state.botSpawnCursor % BOT_SPAWNS.length];
   state.botSpawnCursor += 1;
@@ -540,7 +590,7 @@ function resetGame() {
   Object.assign(state, {
     running: false, survived: 0, score: 0, speedMul: 1, closeCallMultiplier: 1, nearMissCooldown: 0,
     phaseGhostTimer: 0, phaseGhostHits: 0, overloadTimer: 0, overloadCooldown: 0,
-    nextPowerupMs: CONFIG.powerupSpawnMs, nextEntityId: 1, nextBotJoinMs: CONFIG.botJoinIntervalMs, botSpawnCursor: 0, pixelTimer: 0,
+    nextPowerupMs: CONFIG.powerupSpawnMs, nextEntityId: 1, nextBotJoinMs: CONFIG.botJoinIntervalMs, nextBotRefillMs: 0, botSpawnCursor: 0, pixelTimer: 0,
   });
 
   state.entities.push(createEntity(true, state.selectedTrail.color, 0, 0, 0));
@@ -889,8 +939,12 @@ function aheadCutoffTurn(bot, target) {
   const sameHeading = DIR[bot.dirIndex].x * pd.x + DIR[bot.dirIndex].z * pd.z > 0.78;
 
   if (!sameHeading || aheadDist < 7 || aheadDist > 64 || Math.abs(lateral) > 22) return null;
-  if (Math.abs(pd.x) > 0) return lateral >= 0 ? 2 : 0;
-  return lateral >= 0 ? 3 : 1;
+
+  // Personality-based flank preference to avoid bots feeling like mirrored player inputs.
+  const preferredSide = bot.flankPreference || 1;
+  const side = lateral === 0 ? preferredSide : Math.sign(lateral);
+  if (Math.abs(pd.x) > 0) return side >= 0 ? 2 : 0;
+  return side >= 0 ? 3 : 1;
 }
 
 function shouldWallSacrifice(bot, target) {
@@ -939,13 +993,31 @@ function shouldForceWallKamikaze(bot, target) {
     .slice()
     .sort((a, b) => distSq2D(a, target) - distSq2D(b, target))[0];
 
-  return nearest?.id === bot.id;
+  // Not always nearest: pick one deterministic-but-rotating candidate to avoid mirrored group behavior.
+  const candidates = state.entities
+    .filter((e) => !e.isPlayer && e.alive)
+    .slice()
+    .sort((a, b) => distSq2D(a, target) - distSq2D(b, target));
+  const idx = Math.min(candidates.length - 1, Math.floor((state.survived * 0.6) % Math.max(1, candidates.length)));
+  const picked = candidates[idx] || nearest;
+
+  return picked?.id === bot.id;
+}
+
+function queueBotDecision(bot, optionsPayload) {
+  if (!state.aiWorkerReady || !state.aiWorker) return false;
+
+  state.aiRequestSeq += 1;
+  const requestId = state.aiRequestSeq;
+  state.aiPending.set(requestId, { botId: bot.id, expiresAt: state.survived + 0.45 });
+  state.aiWorker.postMessage({ type: 'SCORE_OPTIONS', requestId, options: optionsPayload });
+  return true;
 }
 
 function aiTurn(bot, dt) {
   bot.thinkTimer -= dt;
   if (bot.thinkTimer > 0) return;
-  bot.thinkTimer = randomIn(0.04, 0.12);
+  bot.thinkTimer = randomIn(0.04, 0.12) * (2 - (bot.personalityAggro || 1));
 
   const options = [bot.dirIndex, (bot.dirIndex + 3) % 4, (bot.dirIndex + 1) % 4];
   const target = selectBotTarget(bot);
@@ -975,35 +1047,62 @@ function aiTurn(bot, dt) {
     return;
   }
 
-  let best = options[0];
-  let bestScore = -Infinity;
+  const targetOffset = {
+    x: target.x + (bot.flankPreference || 1) * 6,
+    z: target.z + (bot.flankPreference || 1) * -6,
+  };
 
-  for (const opt of options) {
+  const optionsPayload = options.map((opt) => {
     const d = DIR[opt];
     const probe = { x: bot.x + d.x * 10, z: bot.z + d.z * 10 };
-    const ownTrap = willHitOwnTrailSoon(bot, opt, 22) ? 1 : 0;
+    const ownTrap = willHitOwnTrailSoon(bot, opt, 22);
+    const tFuture = {
+      x: target.x + targetDir.x * 14 + (targetOffset.x - target.x) * 0.45,
+      z: target.z + targetDir.z * 14 + (targetOffset.z - target.z) * 0.45,
+    };
 
-    let score = 0;
-    score -= estimateDanger(bot.x, bot.z, opt, bot.id);
+    return {
+      opt,
+      danger: estimateDanger(bot.x, bot.z, opt, bot.id),
+      distToFuture: Math.max(0, 120 - distSq2D(probe, tFuture)),
+      wallIntercept: wallInterceptScore(bot, opt, target),
+      ramming: target?.isPlayer ? rammingAmbushScore(bot, opt) : 0,
+      freeSpace: projectedFreeSpace(bot, opt),
+      exitScore: pathfindExitScore(bot, opt),
+      preferred: opt === preferred,
+      loopPenalty: loopPenalty(bot, opt),
+      ownTrap,
+      aggro: (bot.personalityAggro || 1),
+      noise: (bot.personalityNoise || 0),
+      randomJitter: randomIn(-7, 7),
+    };
+  });
 
-    const tFuture = { x: target.x + targetDir.x * 14, z: target.z + targetDir.z * 14 };
-    score += Math.max(0, 120 - distSq2D(probe, tFuture));
-    score += wallInterceptScore(bot, opt, target) * 1.3;
-    if (target?.isPlayer) score += rammingAmbushScore(bot, opt) * 1.25;
-    score += projectedFreeSpace(bot, opt) * 0.95;
-    score += pathfindExitScore(bot, opt);
-
-    if (opt === preferred) score += 24;
-    score -= loopPenalty(bot, opt);
-    score -= ownTrap * 260;
-
-    if (score > bestScore) {
-      bestScore = score;
-      best = opt;
+  const queued = queueBotDecision(bot, optionsPayload);
+  if (!queued) {
+    // Fallback path when worker is unavailable.
+    let best = options[0];
+    let bestScore = -Infinity;
+    for (const entry of optionsPayload) {
+      let score = 0;
+      score -= entry.danger;
+      score += entry.distToFuture;
+      score += entry.wallIntercept * (1.05 + entry.aggro * 0.35);
+      score += entry.ramming * (1.0 + entry.aggro * 0.25);
+      score += entry.freeSpace * 0.95;
+      score += entry.exitScore;
+      if (entry.preferred) score += 18 + entry.aggro * 8;
+      score -= entry.loopPenalty;
+      score -= entry.ownTrap ? 260 : 0;
+      score += entry.noise * 0.35;
+      score += entry.randomJitter;
+      if (score > bestScore) {
+        bestScore = score;
+        best = entry.opt;
+      }
     }
+    bot.dirIndex = best;
   }
-
-  bot.dirIndex = best;
 
   // Avoid brain-dead straight runs into the outer wall unless it's a deliberate cutoff case above.
   if (!shouldWallSacrifice(bot, target) && willHitOwnTrailSoon(bot, bot.dirIndex, 12)) {
@@ -1036,26 +1135,34 @@ function checkCollision(entity, fromX, fromZ, toX, toZ) {
   return false;
 }
 
+function atlasColorIndex(color) {
+  const palette = ['#17f2ff', '#ff2cc6', '#a5ff32', '#ffbb33'];
+  const target = new THREE.Color(color);
+  let bestIdx = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < palette.length; i += 1) {
+    const c = new THREE.Color(palette[i]);
+    const dist = (target.r - c.r) ** 2 + (target.g - c.g) ** 2 + (target.b - c.b) ** 2;
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
 function getBitTexture(char, color) {
   const key = `${char}-${color}`;
   if (gfx.bitTextures[key]) return gfx.bitTextures[key];
+  if (!gfx.atlasTexture) return null;
 
-  const bitCanvas = document.createElement('canvas');
-  bitCanvas.width = 64;
-  bitCanvas.height = 64;
-  const ctx = bitCanvas.getContext('2d');
-  if (!ctx) return null;
-
-  ctx.clearRect(0, 0, 64, 64);
-  ctx.fillStyle = color;
-  ctx.font = 'bold 44px monospace';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(char, 32, 34);
-
-  const texture = new THREE.CanvasTexture(bitCanvas);
+  const row = char === '1' ? 1 : 0;
+  const col = atlasColorIndex(color);
+  const x = 0.5 + col * 0.125;
+  const y = 0.25 + row * 0.25;
+  const texture = makeAtlasSubTexture(x, y, 0.125, 0.25);
+  if (!texture) return null;
   texture.colorSpace = THREE.SRGBColorSpace;
-  texture.needsUpdate = true;
   gfx.bitTextures[key] = texture;
   return texture;
 }
@@ -1241,13 +1348,12 @@ function updateNearMiss(dt) {
 
   if (gotClose) {
     state.closeCallMultiplier = Math.min(5, state.closeCallMultiplier + 0.24);
-    state.speedMul = Math.min(2.9, state.speedMul + 0.025);
     state.score += 11 * state.closeCallMultiplier;
     state.nearMissCooldown = 0.28;
     triggerSynth(310, 0.04, 'triangle');
   } else {
     state.closeCallMultiplier = Math.max(1, state.closeCallMultiplier - dt * 0.1);
-    state.speedMul = Math.max(1, state.speedMul - dt * 0.03);
+    state.speedMul = 1;
   }
 }
 
@@ -1297,6 +1403,9 @@ function updateGame(dt) {
   if (!p?.alive) return;
 
   state.survived += dt;
+  for (const [requestId, pending] of state.aiPending) {
+    if (pending.expiresAt < state.survived) state.aiPending.delete(requestId);
+  }
   state.score += dt * 15 * state.closeCallMultiplier;
   if (state.score > state.bestScore) {
     state.bestScore = state.score;
@@ -1311,6 +1420,15 @@ function updateGame(dt) {
     state.nextBotJoinMs = CONFIG.botJoinIntervalMs;
   }
 
+  state.nextBotRefillMs -= dt * 1000;
+  if (state.nextBotRefillMs <= 0) {
+    const aliveBots = state.entities.filter((e) => !e.isPlayer && e.alive).length;
+    if (aliveBots < CONFIG.minAliveBots) {
+      spawnAdditionalBot(true);
+    }
+    state.nextBotRefillMs = CONFIG.botRefillIntervalMs;
+  }
+
   updateEntities(dt);
   updateNearMiss(dt);
   updatePowerups(dt);
@@ -1321,6 +1439,20 @@ function updateGame(dt) {
 }
 
 function updateUi() {
+  if (Math.abs(state.score - (state.lastUiScore || -1)) < 0.02
+    && Math.abs(state.survived - (state.lastUiTime || -1)) < 0.02
+    && Math.abs(state.closeCallMultiplier - (state.lastUiMult || -1)) < 0.01
+    && state.lastUiSpeed === state.speedMul
+    && state.lastUiTrail === state.selectedTrail.id) {
+    return;
+  }
+
+  state.lastUiScore = state.score;
+  state.lastUiTime = state.survived;
+  state.lastUiMult = state.closeCallMultiplier;
+  state.lastUiSpeed = state.speedMul;
+  state.lastUiTrail = state.selectedTrail.id;
+
   ui.playerName.textContent = state.playerName;
   ui.bestScore.textContent = Math.floor(state.bestScore).toString();
   ui.score.textContent = Math.floor(state.score).toString();
@@ -1403,21 +1535,7 @@ function renderLeaderboard() {
 function render() {
   const pulse = 0.2 + Math.sin(state.survived * 2.5) * 0.06;
   gfx.floor.material.emissiveIntensity = pulse;
-  const neonPulse = 0.5 + Math.sin(state.survived * 4.6) * 0.5;
-  if (gfx.bloomPass) {
-    const speedBoost = state.running ? state.speedMul : 1;
-    gfx.bloomPass.strength = 1.05 + Math.min(1.1, speedBoost * 0.24) + neonPulse * 0.22;
-    gfx.bloomPass.radius = 0.72 + neonPulse * 0.12;
-  }
-  if (gfx.chromaPass) {
-    const speedBoost = state.running ? state.speedMul : 1;
-    gfx.chromaPass.uniforms.amount.value = 0.0012 + Math.min(0.0038, speedBoost * 0.00058) + neonPulse * 0.00035;
-  }
-  if (gfx.composer) {
-    gfx.composer.render();
-  } else {
-    gfx.renderer.render(gfx.scene, gfx.camera);
-  }
+  gfx.renderer.render(gfx.scene, gfx.camera);
 }
 
 function loop(ts) {
@@ -1586,6 +1704,28 @@ function syncMusic() {
   }
 }
 
+
+function initAiWorker() {
+  if (typeof Worker === 'undefined') return;
+  try {
+    state.aiWorker = new Worker('ai-worker.js');
+    state.aiWorkerReady = true;
+    state.aiWorker.addEventListener('message', (event) => {
+      const data = event.data || {};
+      if (data.type !== 'SCORED_OPTIONS') return;
+      const pending = state.aiPending.get(data.requestId);
+      if (!pending) return;
+      state.aiPending.delete(data.requestId);
+      const bot = state.entities.find((entity) => entity.id === pending.botId && !entity.isPlayer && entity.alive);
+      if (!bot || typeof data.best !== 'number') return;
+      bot.dirIndex = data.best;
+    });
+  } catch (_error) {
+    state.aiWorker = null;
+    state.aiWorkerReady = false;
+  }
+}
+
 ui.startBtn.addEventListener('click', startGame);
 ui.fullscreenBtn.addEventListener('click', requestGameFullscreen);
 ui.newPlayerBtn?.addEventListener('click', () => {
@@ -1620,6 +1760,7 @@ ui.audioBtn.addEventListener('click', async () => {
 window.addEventListener('resize', resizeRenderer);
 document.addEventListener('pointerdown', requestFullscreenIfMobile, { once: true });
 prepareBgm();
+initAiWorker();
 
 const profile = loadProfile();
 state.playerName = profile.name;

@@ -76,21 +76,43 @@
           document.body.appendChild(gameScript);
         }
 
-        function loadPostProcessing() {
-          return loadScript('https://unpkg.com/three@0.160.0/examples/js/postprocessing/EffectComposer.js')
-            .then(function () { return loadScript('https://unpkg.com/three@0.160.0/examples/js/postprocessing/RenderPass.js'); })
-            .then(function () { return loadScript('https://unpkg.com/three@0.160.0/examples/js/postprocessing/UnrealBloomPass.js'); })
-            .then(function () { return loadScript('https://unpkg.com/three@0.160.0/examples/js/postprocessing/ShaderPass.js'); })
-            .then(function () { return loadScript('https://unpkg.com/three@0.160.0/examples/js/shaders/CopyShader.js'); })
-            .then(function () { return loadScript('https://unpkg.com/three@0.160.0/examples/js/shaders/RGBShiftShader.js'); });
+        function preCacheWithServiceWorker(registration) {
+          if (!registration || !registration.active || !navigator.serviceWorker.controller) {
+            return Promise.resolve();
+          }
+
+          return new Promise(function (resolve) {
+            var channel = new MessageChannel();
+            channel.port1.onmessage = function () { resolve(); };
+            registration.active.postMessage({ type: 'PRECACHE_GAME_ASSETS' }, [channel.port2]);
+            setTimeout(resolve, 5000);
+          });
         }
 
-        loadScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r160/three.min.js')
-          .catch(function () {
-            return loadScript('https://unpkg.com/three@0.160.0/build/three.min.js');
-          })
-          .then(function () { return loadPostProcessing().catch(function () {}); })
-          .finally(startGameScript);
+        function registerServiceWorker() {
+          if (!('serviceWorker' in navigator)) return Promise.resolve();
+
+          return navigator.serviceWorker.register('sw.js').then(function (registration) {
+            if (!navigator.serviceWorker.controller) {
+              return new Promise(function (resolve) {
+                navigator.serviceWorker.addEventListener('controllerchange', function onControllerChange() {
+                  navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange);
+                  resolve(registration);
+                });
+                setTimeout(function () { resolve(registration); }, 2000);
+              });
+            }
+            return registration;
+          }).then(preCacheWithServiceWorker).catch(function () {});
+        }
+
+        registerServiceWorker().finally(function () {
+          loadScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r160/three.min.js')
+            .catch(function () {
+              return loadScript('https://unpkg.com/three@0.160.0/build/three.min.js');
+            })
+            .finally(startGameScript);
+        });
       })();
     </script>
   </body>

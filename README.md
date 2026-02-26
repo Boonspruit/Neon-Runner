@@ -11,10 +11,14 @@ A Tron-inspired survival game rendered with Three.js + WebGL.
   - **System Overload:** temporary slow-motion for tighter corridors.
 - Trail customization unlocks with neon colors and particle styles.
 - Dynamic synthwave-style generated audio that intensifies with speed.
+- Texture atlas-driven particle effects and neon glow sprites to reduce texture churn.
+- Web Worker-assisted bot scoring to move AI scoring calculations off the main UI thread.
 
 ## Run
-Serve the folder with any static server (recommended so the Three.js CDN script loads reliably).
+Serve the folder with any static server (required for Service Worker + CDN loading).
 
+- The app registers `sw.js` and pre-caches the game shell and Three.js dependencies before the gameplay script starts.
+- On first visit, the Service Worker is installed/activated and then used to warm caches; subsequent launches start faster and are resilient to transient network issues.
 
 ## Custom Music
 - For copyright-safe background music, place your own licensed loop at `assets/synthwave-loop.mp3`.
