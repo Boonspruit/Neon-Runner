@@ -107,16 +107,43 @@ canvas {
   backdrop-filter: blur(4px);
 }
 
-.in-game-menu p {
-  margin: 0 0 0.3rem;
-  font-size: 0.72rem;
-  opacity: 0.9;
-}
-
 .in-game-menu.hidden {
   display: none;
 }
 
+
+.mobile-corner-stats {
+  position: absolute;
+  top: 0.55rem;
+  right: 0.55rem;
+  z-index: 6;
+  display: none;
+  flex-direction: column;
+  gap: 0.22rem;
+  padding: 0.32rem 0.42rem;
+  border-radius: 8px;
+  border: 1px solid rgba(23, 242, 255, 0.42);
+  background: rgba(5, 9, 18, 0.55);
+  backdrop-filter: blur(4px);
+  font-size: 0.72rem;
+}
+
+.mobile-corner-stats strong {
+  display: inline-block;
+  color: #9ef7ff;
+  min-width: 2.5ch;
+  text-align: right;
+}
+
+.mobile-score strong.pop {
+  animation: scorePop 180ms ease-out;
+}
+
+@keyframes scorePop {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.42); }
+  100% { transform: scale(1); }
+}
 .overlay {
   position: absolute;
   inset: 0;
@@ -206,9 +233,15 @@ canvas {
     padding: 0.35rem 0.45rem;
   }
 
-  .in-game-menu p {
-    font-size: 0.65rem;
+  .stats span:nth-child(3),
+  .stats span:nth-child(4) {
+    display: none;
   }
+
+  .mobile-corner-stats {
+    display: flex;
+  }
+
 }
 
 

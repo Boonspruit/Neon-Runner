@@ -19,6 +19,9 @@ const ui = {
   trailOptions: document.getElementById('trail-options'),
   startTrailOptions: document.getElementById('start-trail-options'),
   inGameMenu: document.getElementById('in-game-menu'),
+  mobileCornerStats: document.getElementById('mobile-corner-stats'),
+  mobileScore: document.getElementById('mobile-score'),
+  mobileTime: document.getElementById('mobile-time'),
   bgm: document.getElementById('bgm'),
 };
 
@@ -78,13 +81,13 @@ const TRAIL_STYLES = [
 ];
 
 const CONFIG = {
-  fieldHalf: 110,
+  fieldHalf: 92,
   baseSpeed: 22,
   speedRamp: 0,
-  botCount: 8,
-  maxBots: 14,
-  maxBotEntities: 20,
-  minAliveBots: 6,
+  botCount: 3,
+  maxBots: 12,
+  maxBotEntities: 16,
+  minAliveBots: 3,
   botJoinIntervalMs: 5000,
   botRefillIntervalMs: 850,
   trailSpacing: 0.34,
@@ -93,9 +96,40 @@ const CONFIG = {
   bikeHitRadius: 0.24,
   nearMissDist: 2.8,
   powerupSpawnMs: 5200,
+  turnSnapSize: 0.5,
+  botSpawnMinGap: 14,
+  botTurnMinCooldown: 0.3,
+  botTurnCooldownJitter: 0.16,
+  botMinTurnTravel: 4.2,
+  botTurnSafetyHorizon: 18,
+  botGrowthIntervalSec: 28,
+  botRespawnMinGap: 24,
+  recentSpawnAvoidRadius: 20,
+  recentSpawnRememberSec: 14,
+  spawnWallInset: 3.2,
+  botSpeedMultiplier: 0.96,
+  trailPruneMaxPerTick: 3,
+  deadTrailPruneMaxPerTick: 24,
+  deadBotTrailFadeAge: 3.8,
+  botRespawnCenterLockMin: 0.45,
+  botRespawnCenterLockMax: 0.8,
+  wallTrapProximityDist: 14,
+  wallTrapActivateSec: 5,
+  wallTrapLeadDist: 20,
 };
 
 const BOT_COLORS = ['#ff2cc6', '#ffa24d', '#79ff7a', '#7a8dff', '#25f0ff', '#ff5a9f', '#ffd84e', '#c98dff', '#6bffb0', '#ff8f4d', '#67d1ff', '#ff4dc4', '#b9ff4d', '#8ec5ff', '#ff6e9c', '#9ef07a', '#ffb86c', '#5af7d2', '#a08dff', '#ff7fb2', '#7df06b', '#6ec5ff', '#ff9d57', '#7affd9'];
+
+
+function centerWallSpawnPoints() {
+  const edge = CONFIG.fieldHalf - CONFIG.spawnWallInset;
+  return [
+    { x: 0, z: edge, dir: 0 },
+    { x: 0, z: -edge, dir: 2 },
+    { x: -edge, z: 0, dir: 1 },
+    { x: edge, z: 0, dir: 3 },
+  ];
+}
 
 function botPaletteExcluding(playerColor) {
   const normalized = (playerColor || '').toLowerCase();
@@ -111,17 +145,26 @@ function botPaletteExcluding(playerColor) {
 }
 
 const BOT_SPAWNS = [
-  [-94, -94, 1],
-  [94, 94, 3],
-  [-94, 94, 2],
-  [94, -94, 0],
-  [0, -108, 1],
-  [108, 0, 2],
-  [-108, 0, 0],
-  [58, -82, 1],
-  [-58, 82, 3],
-  [74, 74, 2],
+  [-0.88, -0.88],
+  [0.88, 0.88],
+  [-0.88, 0.88],
+  [0.88, -0.88],
+  [0, -0.98],
+  [0.98, 0],
+  [-0.98, 0],
+  [0.56, -0.8],
+  [-0.56, 0.8],
+  [0.74, 0.74],
 ];
+
+
+function resolveSpawnPoint(index) {
+  const [nx, nz] = BOT_SPAWNS[index % BOT_SPAWNS.length];
+  const edge = CONFIG.fieldHalf - 2.8;
+  const x = Math.max(-edge, Math.min(edge, nx * edge));
+  const z = Math.max(-edge, Math.min(edge, nz * edge));
+  return [x, z];
+}
 
 function pickUniqueBotColor(playerColor, usedColors) {
   const palette = botPaletteExcluding(playerColor);
@@ -178,6 +221,9 @@ const state = {
   aiWorkerReady: false,
   aiRequestSeq: 0,
   aiPending: new Map(),
+  recentBotSpawns: [],
+  wallPressureTime: 0,
+  wallTrap: { active: false, flankerId: null, sealerId: null, context: null },
 };
 
 const audio = {
@@ -201,6 +247,7 @@ const gfx = {
   atlasTexture: null,
   skylineTextures: [],
   skylineWalls: [],
+  skylineLightBeams: [],
   skylineFlickerMs: 0,
 };
 
@@ -245,7 +292,7 @@ function trailSegmentHit(x, z, opts = {}) {
     for (let i = 1; i < samples.length; i += 1) {
       const a = samples[i - 1];
       const b = samples[i];
-      if (state.survived - b.bornAt > trailFadeAge()) continue;
+      if (state.survived - b.bornAt > trailFadeAge(owner)) continue;
       if (ownRecentGrace > 0 && owner.id === onlyEntityId && state.survived - b.bornAt < ownRecentGrace) continue;
       if (pointSegmentDistSq(x, z, a.x, a.z, b.x, b.z) < hitSq) return true;
     }
@@ -312,51 +359,79 @@ function initSkylineBackdrop() {
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.ClampToEdgeWrapping;
-    tex.repeat.set(3, 1);
+    tex.repeat.set(2.8, 1);
   });
   gfx.skylineTextures = [texA, texB];
   gfx.skylineWalls = [];
+  gfx.skylineLightBeams = [];
 
-  const wallHeight = 40;
-  const offset = CONFIG.fieldHalf + 1.2;
-  const wallWidth = CONFIG.fieldHalf * 2 + 12;
+  const wallHeight = 44;
+  const offset = CONFIG.fieldHalf + 1.0;
+  const frontBackWidth = CONFIG.fieldHalf * 2 - 1.2;
+  const sideWidth = CONFIG.fieldHalf * 2 - 1.2;
 
-  const planeGeo = new THREE.PlaneGeometry(wallWidth, wallHeight);
   const configs = [
-    { x: 0, z: -offset, rotY: 0 },
-    { x: 0, z: offset, rotY: Math.PI },
-    { x: -offset, z: 0, rotY: Math.PI / 2 },
-    { x: offset, z: 0, rotY: -Math.PI / 2 },
+    { x: 0, z: -offset, rotY: 0, width: frontBackWidth, axis: 'x', far: -1 },
+    { x: 0, z: offset, rotY: Math.PI, width: frontBackWidth, axis: 'x', far: 1 },
+    { x: -offset, z: 0, rotY: Math.PI / 2, width: sideWidth, axis: 'z', far: -1 },
+    { x: offset, z: 0, rotY: -Math.PI / 2, width: sideWidth, axis: 'z', far: 1 },
   ];
 
   for (const cfg of configs) {
+    const planeGeo = new THREE.PlaneGeometry(cfg.width, wallHeight);
+    const map = texA.clone();
+    map.colorSpace = THREE.SRGBColorSpace;
+    map.wrapS = THREE.RepeatWrapping;
+    map.wrapT = THREE.ClampToEdgeWrapping;
+    map.repeat.set(2.8, 1);
+
     const mat = new THREE.MeshBasicMaterial({
-      map: texA.clone(),
+      map,
       transparent: true,
       opacity: 0.62,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       side: THREE.DoubleSide,
     });
-    mat.map.colorSpace = THREE.SRGBColorSpace;
-    mat.map.wrapS = THREE.RepeatWrapping;
-    mat.map.wrapT = THREE.ClampToEdgeWrapping;
-    mat.map.repeat.set(3, 1);
 
     const wall = new THREE.Mesh(planeGeo, mat);
-    wall.position.set(cfg.x, wallHeight * 0.47, cfg.z);
+    wall.position.set(cfg.x, wallHeight * 0.46, cfg.z);
     wall.rotation.y = cfg.rotY;
     gfx.scene.add(wall);
     gfx.skylineWalls.push(wall);
-  }
 
-  const rimGeo = new THREE.TorusGeometry(CONFIG.fieldHalf + 0.9, 0.22, 10, 120);
-  const rimMat = new THREE.MeshBasicMaterial({ color: 0x2af3ff, transparent: true, opacity: 0.42 });
-  const rim = new THREE.Mesh(rimGeo, rimMat);
-  rim.position.y = 2.0;
-  rim.rotation.x = Math.PI / 2;
-  gfx.scene.add(rim);
+    for (let i = 0; i < 5; i += 1) {
+      const beamGeo = new THREE.PlaneGeometry(randomIn(14, 30), randomIn(52, 78));
+      const beamMat = new THREE.MeshBasicMaterial({
+        color: i % 2 === 0 ? 0x21d8ff : 0xff41d6,
+        transparent: true,
+        opacity: 0.08,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      });
+      const beam = new THREE.Mesh(beamGeo, beamMat);
+      if (cfg.axis === 'x') {
+        beam.position.set(randomIn(-cfg.width * 0.46, cfg.width * 0.46), randomIn(15, 30), cfg.z + cfg.far * 5.5);
+      } else {
+        beam.position.set(cfg.x + cfg.far * 5.5, randomIn(15, 30), randomIn(-cfg.width * 0.46, cfg.width * 0.46));
+      }
+      beam.rotation.y = cfg.rotY;
+      beam.userData = {
+        axis: cfg.axis,
+        base: cfg.axis === 'x' ? beam.position.x : beam.position.z,
+        drift: randomIn(8, 18),
+        speed: randomIn(0.6, 1.45),
+        phase: randomIn(0, Math.PI * 2),
+        hueShift: randomIn(0, 1),
+        spin: randomIn(-0.3, 0.3),
+      };
+      gfx.scene.add(beam);
+      gfx.skylineLightBeams.push(beam);
+    }
+  }
 }
+
 
 function setupThree() {
   gfx.scene = new THREE.Scene();
@@ -384,7 +459,7 @@ function setupThree() {
   gfx.scene.add(hemi, key);
 
   const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(360, 360),
+    new THREE.PlaneGeometry(CONFIG.fieldHalf * 2, CONFIG.fieldHalf * 2),
     new THREE.MeshStandardMaterial({ color: 0x070b15, emissive: 0x071b30, emissiveIntensity: 0.34 })
   );
   floor.rotation.x = -Math.PI / 2;
@@ -394,7 +469,7 @@ function setupThree() {
   gfx.scene.add(floor);
   gfx.floor = floor;
 
-  const grid = new THREE.GridHelper(320, 160, 0x205f8f, 0x13344d);
+  const grid = new THREE.GridHelper(CONFIG.fieldHalf * 2, CONFIG.fieldHalf, 0x205f8f, 0x13344d);
   grid.position.y = -0.7;
   grid.matrixAutoUpdate = false;
   grid.updateMatrix();
@@ -403,8 +478,8 @@ function setupThree() {
 
 
   const wallMat = neonMaterial('#20abcf', 0.52);
-  const longWall = new THREE.BoxGeometry(CONFIG.fieldHalf * 2 + 6, 5.2, 0.8);
-  const sideWall = new THREE.BoxGeometry(0.8, 5.2, CONFIG.fieldHalf * 2 + 6);
+  const longWall = new THREE.BoxGeometry(CONFIG.fieldHalf * 2 + 0.8, 5.2, 0.8);
+  const sideWall = new THREE.BoxGeometry(0.8, 5.2, CONFIG.fieldHalf * 2 + 0.8);
   const top = new THREE.Mesh(longWall, wallMat); top.position.set(0, 1.8, -CONFIG.fieldHalf);
   const bottom = top.clone(); bottom.position.z = CONFIG.fieldHalf;
   const left = new THREE.Mesh(sideWall, wallMat); left.position.set(-CONFIG.fieldHalf, 1.8, 0);
@@ -456,11 +531,14 @@ function createBike(color) {
   return bike;
 }
 
-function createEntity(isPlayer, color, x, z, dirIndex) {
+function createEntity(isPlayer, color, x, z, dirIndex, options = {}) {
   const mesh = createBike(color);
   mesh.position.set(x, 0.1, z);
   mesh.rotation.y = dirIndex * (Math.PI / 2);
   gfx.scene.add(mesh);
+  const openingRush = Boolean(options.openingRush && !isPlayer);
+  const spawnRecoverTimer = isPlayer ? 0 : Math.max(0, Number(options.spawnRecoverTimer) || 0);
+  const spawnRecoverDir = Number.isInteger(options.spawnRecoverDir) ? options.spawnRecoverDir : centerBiasDir(x, z);
   const entity = {
     id: state.nextEntityId++,
     isPlayer,
@@ -495,6 +573,14 @@ function createEntity(isPlayer, color, x, z, dirIndex) {
     deadTimer: 0,
     awaitingTrailClear: false,
     kamikazeUntil: 0,
+    launchLockTimer: openingRush ? randomIn(0.65, 1.05) : 0,
+    openingRush,
+    spawnRecoverTimer,
+    spawnRecoverDir,
+    turnCooldown: 0,
+    lastTurnX: x,
+    lastTurnZ: z,
+    speedFactor: isPlayer ? 1 : CONFIG.botSpeedMultiplier,
   };
   entity.trailSamples.push({ ownerId: entity.id, owner: isPlayer ? 'player' : 'bot', x, z, bornAt: state.survived });
   syncEntityTrailColor(entity);
@@ -612,18 +698,23 @@ function cleanupRunObjects() {
 function spawnAdditionalBot(force = false) {
   const bots = state.entities.filter((e) => !e.isPlayer);
   const aliveCount = bots.filter((e) => e.alive).length;
-  const totalCount = bots.length;
-  if (totalCount >= CONFIG.maxBotEntities) return;
-  if (!force && aliveCount >= CONFIG.maxBots) return;
+  if (aliveCount >= CONFIG.maxBotEntities) return;
+  const desired = desiredAliveBots();
+  if (aliveCount >= desired) return;
 
-  const [x, z] = BOT_SPAWNS[state.botSpawnCursor % BOT_SPAWNS.length];
-  state.botSpawnCursor += 1;
+  const spawn = pickBotSpawn(state.botSpawnCursor, { minGap: CONFIG.botRespawnMinGap, requireUnique: true });
+  state.botSpawnCursor = spawn.nextIndex;
 
   const usedBotColors = new Set(
     state.entities.filter((e) => !e.isPlayer).map((e) => e.color.toLowerCase())
   );
   const botColor = pickUniqueBotColor(state.selectedTrail.color, usedBotColors);
-  state.entities.push(createEntity(false, botColor, x, z, centerBiasDir(x, z)));
+  state.entities.push(createEntity(false, botColor, spawn.x, spawn.z, spawn.dir, {
+    openingRush: false,
+    spawnRecoverTimer: randomIn(CONFIG.botRespawnCenterLockMin, CONFIG.botRespawnCenterLockMax),
+    spawnRecoverDir: spawn.dir,
+  }));
+  rememberBotSpawn(spawn.x, spawn.z);
 }
 
 function resetGame() {
@@ -632,17 +723,20 @@ function resetGame() {
   Object.assign(state, {
     running: false, survived: 0, score: 0, speedMul: 1, closeCallMultiplier: 1, nearMissCooldown: 0,
     phaseGhostTimer: 0, phaseGhostHits: 0, overloadTimer: 0, overloadCooldown: 0,
-    nextPowerupMs: CONFIG.powerupSpawnMs, nextEntityId: 1, nextBotJoinMs: CONFIG.botJoinIntervalMs, nextBotRefillMs: 0, botSpawnCursor: 0, pixelTimer: 0,
+    nextPowerupMs: CONFIG.powerupSpawnMs, nextEntityId: 1, nextBotJoinMs: CONFIG.botJoinIntervalMs, nextBotRefillMs: 0, botSpawnCursor: 0, pixelTimer: 0, recentBotSpawns: [], wallPressureTime: 0, wallTrap: { active: false, flankerId: null, sealerId: null, context: null },
   });
 
-  state.entities.push(createEntity(true, state.selectedTrail.color, 0, 0, 0));
+  const openingSpawns = centerWallSpawnPoints();
+  const playerSpawn = openingSpawns[0];
+  state.entities.push(createEntity(true, state.selectedTrail.color, playerSpawn.x, playerSpawn.z, playerSpawn.dir));
 
   const usedBotColors = new Set();
   for (let i = 0; i < CONFIG.botCount; i += 1) {
-    const [x, z] = BOT_SPAWNS[i % BOT_SPAWNS.length];
+    const spawn = openingSpawns[i + 1];
+    if (!spawn) break;
     const botColor = pickUniqueBotColor(state.selectedTrail.color, usedBotColors);
-    state.entities.push(createEntity(false, botColor, x, z, centerBiasDir(x, z)));
-    state.botSpawnCursor += 1;
+    state.entities.push(createEntity(false, botColor, spawn.x, spawn.z, spawn.dir, { openingRush: true }));
+    rememberBotSpawn(spawn.x, spawn.z);
   }
 
   updateUi();
@@ -652,19 +746,65 @@ function resetGame() {
 function player() { return state.entities[0]; }
 function entityDir(e) { return DIR[e.dirIndex]; }
 
-function trailFadeAge() {
-  return Math.max(3.2, 14 - state.survived * 0.22);
+function desiredAliveBots() {
+  const growth = Math.floor(state.survived / CONFIG.botGrowthIntervalSec);
+  const desired = CONFIG.botCount + growth;
+  return Math.max(CONFIG.minAliveBots, Math.min(CONFIG.maxBots, desired));
+}
+
+function pruneRecentBotSpawns(now = state.survived) {
+  const keepAge = CONFIG.recentSpawnRememberSec;
+  state.recentBotSpawns = state.recentBotSpawns.filter((entry) => now - entry.at <= keepAge);
+}
+
+function isFarFromRecentSpawns(x, z, minGap = CONFIG.recentSpawnAvoidRadius) {
+  pruneRecentBotSpawns();
+  const minSq = minGap * minGap;
+  for (const entry of state.recentBotSpawns) {
+    const dx = x - entry.x;
+    const dz = z - entry.z;
+    if (dx * dx + dz * dz < minSq) return false;
+  }
+  return true;
+}
+
+function isUniqueSpawnCoordinate(x, z, tolerance = 0.15) {
+  for (const e of state.entities) {
+    if (!e) continue;
+    if (Math.abs(e.x - x) <= tolerance && Math.abs(e.z - z) <= tolerance) return false;
+  }
+  return true;
+}
+
+function rememberBotSpawn(x, z) {
+  pruneRecentBotSpawns();
+  state.recentBotSpawns.push({ x, z, at: state.survived });
+}
+
+function trailFadeAge(entity = null) {
+  const base = Math.max(12, 44 - state.survived * 0.16);
+  if (!entity) return base;
+  if (!entity.isPlayer && !entity.alive) {
+    return CONFIG.deadBotTrailFadeAge;
+  }
+  if (!entity.isPlayer) {
+    return Math.max(7.5, base * 0.78);
+  }
+  return base;
 }
 
 function pruneAgedTrailSamples(entity) {
-  const fadeAge = trailFadeAge();
+  const fadeAge = trailFadeAge(entity);
   const minSamples = entity.alive ? 1 : 0;
   let changed = false;
 
-  while (entity.trailSamples.length > minSamples) {
+  const pruneLimit = entity.alive ? CONFIG.trailPruneMaxPerTick : CONFIG.deadTrailPruneMaxPerTick;
+  let removed = 0;
+  while (entity.trailSamples.length > minSamples && removed < pruneLimit) {
     const next = entity.trailSamples[1] || entity.trailSamples[0];
     if (state.survived - next.bornAt <= fadeAge) break;
     entity.trailSamples.shift();
+    removed += 1;
     changed = true;
   }
 
@@ -675,8 +815,31 @@ function trailLife() {
   return 1;
 }
 
-function turnLeft(e) { e.dirIndex = (e.dirIndex + 3) % 4; }
-function turnRight(e) { e.dirIndex = (e.dirIndex + 1) % 4; }
+function snapToTurnGrid(v) {
+  const cell = CONFIG.turnSnapSize || 0.5;
+  return Math.round(v / cell) * cell;
+}
+
+function applyDirectionChange(entity, newDir) {
+  if (!entity || entity.dirIndex === newDir) return;
+  entity.dirIndex = newDir;
+  const d = DIR[newDir];
+  if (Math.abs(d.x) > 0) {
+    entity.z = snapToTurnGrid(entity.z);
+  } else {
+    entity.x = snapToTurnGrid(entity.x);
+  }
+  entity.trailPendingDist = 0;
+  if (!entity.isPlayer) {
+    entity.turnCooldown = CONFIG.botTurnMinCooldown + randomIn(0, CONFIG.botTurnCooldownJitter);
+    entity.lastTurnX = entity.x;
+    entity.lastTurnZ = entity.z;
+  }
+  addTrailSample(entity, entity.x, entity.z);
+}
+
+function turnLeft(e) { applyDirectionChange(e, (e.dirIndex + 3) % 4); }
+function turnRight(e) { applyDirectionChange(e, (e.dirIndex + 1) % 4); }
 
 function handleTurnInput(direction) {
   const p = player();
@@ -856,9 +1019,160 @@ function optionTowardTarget(bot, target) {
   return dz > 0 ? 2 : 0;
 }
 
+function optionTowardPoint(bot, point) {
+  const dx = point.x - bot.x;
+  const dz = point.z - bot.z;
+  if (Math.abs(dx) > Math.abs(dz)) return dx > 0 ? 1 : 3;
+  return dz > 0 ? 2 : 0;
+}
+
+function perimeterContextForPlayer(p) {
+  const wallDistX = CONFIG.fieldHalf - Math.abs(p.x);
+  const wallDistZ = CONFIG.fieldHalf - Math.abs(p.z);
+  const wallDist = Math.min(wallDistX, wallDistZ);
+  if (wallDist > CONFIG.wallTrapProximityDist) return null;
+
+  if (wallDistX <= wallDistZ) {
+    return { axis: 'x', sign: Math.sign(p.x) || 1, wallDist };
+  }
+  return { axis: 'z', sign: Math.sign(p.z) || 1, wallDist };
+}
+
+function wallTrapTargets(bot, target, context) {
+  const pd = entityDir(target);
+  const lead = CONFIG.wallTrapLeadDist;
+  const wallEdge = CONFIG.fieldHalf - 2.2;
+  const sealInset = CONFIG.fieldHalf - 8.5;
+
+  let flanker = { x: target.x + pd.x * lead, z: target.z + pd.z * lead };
+  let sealer = { x: target.x + pd.x * (lead * 0.55), z: target.z + pd.z * (lead * 0.55) };
+
+  if (context.axis === 'x') {
+    flanker.x = context.sign * wallEdge;
+    sealer.x = context.sign * sealInset;
+    if (Math.abs(pd.z) < 0.1) sealer.z += (bot.flankPreference || 1) * 12;
+  } else {
+    flanker.z = context.sign * wallEdge;
+    sealer.z = context.sign * sealInset;
+    if (Math.abs(pd.x) < 0.1) sealer.x += (bot.flankPreference || 1) * 12;
+  }
+
+  flanker.x = Math.max(-CONFIG.fieldHalf + 2, Math.min(CONFIG.fieldHalf - 2, flanker.x));
+  flanker.z = Math.max(-CONFIG.fieldHalf + 2, Math.min(CONFIG.fieldHalf - 2, flanker.z));
+  sealer.x = Math.max(-CONFIG.fieldHalf + 3.5, Math.min(CONFIG.fieldHalf - 3.5, sealer.x));
+  sealer.z = Math.max(-CONFIG.fieldHalf + 3.5, Math.min(CONFIG.fieldHalf - 3.5, sealer.z));
+  return { flanker, sealer };
+}
+
+function updateWallTrapPlan(dt, target) {
+  const context = perimeterContextForPlayer(target);
+  if (context) {
+    state.wallPressureTime += dt;
+  } else {
+    state.wallPressureTime = Math.max(0, state.wallPressureTime - dt * 2.2);
+  }
+
+  if (state.wallPressureTime < CONFIG.wallTrapActivateSec || !context) {
+    state.wallTrap = { active: false, flankerId: null, sealerId: null, context: null };
+    return;
+  }
+
+  const aliveBots = state.entities.filter((e) => !e.isPlayer && e.alive);
+  if (aliveBots.length < 2) {
+    state.wallTrap = { active: false, flankerId: null, sealerId: null, context: null };
+    return;
+  }
+
+  const ordered = aliveBots.slice().sort((a, b) => distSq2D(a, target) - distSq2D(b, target));
+  state.wallTrap = {
+    active: true,
+    flankerId: ordered[0]?.id ?? null,
+    sealerId: ordered[1]?.id ?? null,
+    context,
+  };
+}
+
+
+function mirrorPenaltyScore(bot, optDir, target) {
+  if (!target?.isPlayer) return 0;
+  const pd = entityDir(target);
+  const d = DIR[optDir];
+  const sameDirection = d.x * pd.x + d.z * pd.z > 0.88;
+  if (!sameDirection) return 0;
+
+  const relX = bot.x - target.x;
+  const relZ = bot.z - target.z;
+  const aheadDist = relX * pd.x + relZ * pd.z;
+  const lateral = Math.abs(relX * pd.z - relZ * pd.x);
+  if (aheadDist < -10 || aheadDist > 42 || lateral > 24) return 0;
+
+  return 52 + Math.max(0, (22 - lateral) * 1.55);
+}
+
 function centerBiasDir(x, z) {
   if (Math.abs(x) > Math.abs(z)) return x > 0 ? 3 : 1;
   return z > 0 ? 0 : 2;
+}
+
+function spawnPointIsSafe(x, z, dirIndex, minGap = CONFIG.botSpawnMinGap, recentGap = CONFIG.recentSpawnAvoidRadius, requireUnique = false) {
+  if (Math.abs(x) >= CONFIG.fieldHalf - 2 || Math.abs(z) >= CONFIG.fieldHalf - 2) return false;
+  const minDistSq = minGap * minGap;
+  for (const e of state.entities) {
+    if (!e?.alive) continue;
+    if (distSq2D({ x, z }, e) < minDistSq) return false;
+  }
+
+  if (pointBlocked(x, z, null)) return false;
+  if (recentGap > 0 && !isFarFromRecentSpawns(x, z, recentGap)) return false;
+  if (requireUnique && !isUniqueSpawnCoordinate(x, z)) return false;
+  const d = DIR[dirIndex];
+  for (const step of [2.4, 4.8, 7.2]) {
+    const nx = x + d.x * step;
+    const nz = z + d.z * step;
+    if (Math.abs(nx) >= CONFIG.fieldHalf - 1 || Math.abs(nz) >= CONFIG.fieldHalf - 1) return false;
+    if (pointBlocked(nx, nz, null)) return false;
+  }
+  return true;
+}
+
+function pickBotSpawn(preferredIndex = 0, options = {}) {
+  const minGap = options.minGap ?? CONFIG.botSpawnMinGap;
+  const recentGap = options.recentGap ?? CONFIG.recentSpawnAvoidRadius;
+  const requireUnique = Boolean(options.requireUnique);
+  for (let offset = 0; offset < BOT_SPAWNS.length; offset += 1) {
+    const idx = preferredIndex + offset;
+    const [x, z] = resolveSpawnPoint(idx);
+    const dir = centerBiasDir(x, z);
+    if (spawnPointIsSafe(x, z, dir, minGap, recentGap, requireUnique)) {
+      return { x, z, dir, nextIndex: idx + 1 };
+    }
+  }
+
+  const range = CONFIG.fieldHalf - 10;
+  for (let i = 0; i < 24; i += 1) {
+    const x = randomIn(-range, range);
+    const z = randomIn(-range, range);
+    const dir = centerBiasDir(x, z);
+    if (spawnPointIsSafe(x, z, dir, minGap * 0.8, recentGap * 0.8, requireUnique)) {
+      return { x, z, dir, nextIndex: preferredIndex + 1 };
+    }
+  }
+
+  const [x, z] = resolveSpawnPoint(preferredIndex);
+  if (!requireUnique || isUniqueSpawnCoordinate(x, z, 0.05)) {
+    return { x, z, dir: centerBiasDir(x, z), nextIndex: preferredIndex + 1 };
+  }
+
+  for (let i = 0; i < 28; i += 1) {
+    const jx = x + randomIn(-7, 7);
+    const jz = z + randomIn(-7, 7);
+    const dir = centerBiasDir(jx, jz);
+    if (spawnPointIsSafe(jx, jz, dir, minGap * 0.7, recentGap * 0.6, true)) {
+      return { x: jx, z: jz, dir, nextIndex: preferredIndex + 1 };
+    }
+  }
+
+  return { x, z, dir: centerBiasDir(x, z), nextIndex: preferredIndex + 1 };
 }
 
 function playerCutoffTurn(bot) {
@@ -956,6 +1270,25 @@ function safestTurn(bot) {
   return best;
 }
 
+function botTravelSinceTurn(bot) {
+  const lx = Number.isFinite(bot.lastTurnX) ? bot.lastTurnX : bot.x;
+  const lz = Number.isFinite(bot.lastTurnZ) ? bot.lastTurnZ : bot.z;
+  return Math.hypot(bot.x - lx, bot.z - lz);
+}
+
+function canBotTurn(bot, dirIndex, options = {}) {
+  if (!bot?.alive) return false;
+  const { force = false, horizon = CONFIG.botTurnSafetyHorizon } = options;
+  if (!force && botTravelSinceTurn(bot) < CONFIG.botMinTurnTravel) return false;
+  return !willHitOwnTrailSoon(bot, dirIndex, horizon);
+}
+
+function tryBotTurn(bot, dirIndex, options = {}) {
+  if (!canBotTurn(bot, dirIndex, options)) return false;
+  applyDirectionChange(bot, dirIndex);
+  return true;
+}
+
 function wallPressureCutoffTurn(bot, target) {
   const pd = entityDir(target);
   const relX = bot.x - target.x;
@@ -987,6 +1320,40 @@ function aheadCutoffTurn(bot, target) {
   const side = lateral === 0 ? preferredSide : Math.sign(lateral);
   if (Math.abs(pd.x) > 0) return side >= 0 ? 2 : 0;
   return side >= 0 ? 3 : 1;
+}
+
+
+function parallelAheadBlockTurn(bot, target) {
+  if (!target?.alive) return null;
+  const pd = entityDir(target);
+  const bd = entityDir(bot);
+  const sameHeading = bd.x * pd.x + bd.z * pd.z > 0.9;
+  if (!sameHeading) return null;
+
+  const relX = bot.x - target.x;
+  const relZ = bot.z - target.z;
+  const aheadDist = relX * pd.x + relZ * pd.z;
+  const lateral = relX * pd.z - relZ * pd.x;
+  const lateralAbs = Math.abs(lateral);
+  if (aheadDist < 8 || aheadDist > 58 || lateralAbs < 2.5 || lateralAbs > 24) return null;
+
+  if (Math.abs(pd.x) > 0) return lateral > 0 ? 2 : 0;
+  return lateral > 0 ? 3 : 1;
+}
+
+function parallelBlockBonusScore(bot, optDir, target) {
+  const blockTurn = parallelAheadBlockTurn(bot, target);
+  if (blockTurn === null || optDir !== blockTurn) return 0;
+
+  const pd = entityDir(target);
+  const relX = bot.x - target.x;
+  const relZ = bot.z - target.z;
+  const aheadDist = relX * pd.x + relZ * pd.z;
+  const lateral = Math.abs(relX * pd.z - relZ * pd.x);
+
+  const laneWeight = Math.max(0, 1 - (lateral / 22));
+  const aheadWeight = Math.max(0, 1 - Math.abs(26 - aheadDist) / 26);
+  return 72 + laneWeight * 62 + aheadWeight * 40;
 }
 
 function shouldWallSacrifice(bot, target) {
@@ -1057,6 +1424,22 @@ function queueBotDecision(bot, optionsPayload) {
 }
 
 function aiTurn(bot, dt) {
+  bot.spawnRecoverTimer = Math.max(0, (bot.spawnRecoverTimer || 0) - dt);
+  if (bot.spawnRecoverTimer > 0) {
+    tryBotTurn(bot, bot.spawnRecoverDir, { force: true, horizon: 16 });
+    return;
+  }
+
+  bot.launchLockTimer = Math.max(0, (bot.launchLockTimer || 0) - dt);
+  if (bot.openingRush && bot.launchLockTimer > 0) {
+    tryBotTurn(bot, centerBiasDir(bot.x, bot.z), { force: true, horizon: 8 });
+    return;
+  }
+  if (bot.openingRush && bot.launchLockTimer <= 0) bot.openingRush = false;
+
+  bot.turnCooldown = Math.max(0, (bot.turnCooldown || 0) - dt);
+  if (bot.turnCooldown > 0) return;
+
   bot.thinkTimer -= dt;
   if (bot.thinkTimer > 0) return;
   bot.thinkTimer = randomIn(0.04, 0.12) * (2 - (bot.personalityAggro || 1));
@@ -1065,27 +1448,41 @@ function aiTurn(bot, dt) {
   const target = selectBotTarget(bot);
   if (!target?.alive) return;
 
+  if (state.wallTrap.active && state.wallTrap.context) {
+    const { flanker, sealer } = wallTrapTargets(bot, target, state.wallTrap.context);
+    if (state.wallTrap.flankerId === bot.id) {
+      const flankDir = optionTowardPoint(bot, flanker);
+      if (tryBotTurn(bot, flankDir, { force: true, horizon: 16 })) return;
+    } else if (state.wallTrap.sealerId === bot.id) {
+      const sealDir = optionTowardPoint(bot, sealer);
+      if (tryBotTurn(bot, sealDir, { force: true, horizon: 16 })) return;
+    }
+  }
+
   if (shouldForceWallKamikaze(bot, target)) {
     bot.kamikazeUntil = Math.max(bot.kamikazeUntil || 0, state.survived + 1.1);
   }
 
   if ((bot.kamikazeUntil || 0) > state.survived) {
-    bot.dirIndex = wallCrashDirFromPosition(bot, target);
+    tryBotTurn(bot, wallCrashDirFromPosition(bot, target), { force: true, horizon: 6 });
     return;
   }
 
   const targetDir = entityDir(target);
   const preferred = optionTowardTarget(bot, target);
 
+  const parallelBlockTurn = parallelAheadBlockTurn(bot, target);
+  if (parallelBlockTurn !== null && tryBotTurn(bot, parallelBlockTurn, { horizon: 12 })) {
+    return;
+  }
+
   const cutoffTurn = wallPressureCutoffTurn(bot, target);
-  if (cutoffTurn !== null && !willHitOwnTrailSoon(bot, cutoffTurn, 9)) {
-    bot.dirIndex = cutoffTurn;
+  if (cutoffTurn !== null && tryBotTurn(bot, cutoffTurn, { horizon: 11 })) {
     return;
   }
 
   const forwardCutoff = aheadCutoffTurn(bot, target);
-  if (forwardCutoff !== null) {
-    bot.dirIndex = forwardCutoff;
+  if (forwardCutoff !== null && tryBotTurn(bot, forwardCutoff, { horizon: 12 })) {
     return;
   }
 
@@ -1109,6 +1506,9 @@ function aiTurn(bot, dt) {
       distToFuture: Math.max(0, 120 - distSq2D(probe, tFuture)),
       wallIntercept: wallInterceptScore(bot, opt, target),
       ramming: target?.isPlayer ? rammingAmbushScore(bot, opt) : 0,
+      killBonus: target?.isPlayer ? Math.max(0, 24 - Math.sqrt(distSq2D(probe, target))) * 2.2 : 0,
+      mirrorPenalty: mirrorPenaltyScore(bot, opt, target),
+      parallelBlockBonus: parallelBlockBonusScore(bot, opt, target),
       freeSpace: projectedFreeSpace(bot, opt),
       exitScore: pathfindExitScore(bot, opt),
       preferred: opt === preferred,
@@ -1131,10 +1531,13 @@ function aiTurn(bot, dt) {
       score += entry.distToFuture;
       score += entry.wallIntercept * (1.05 + entry.aggro * 0.35);
       score += entry.ramming * (1.0 + entry.aggro * 0.25);
+      score += entry.killBonus;
+      score += entry.parallelBlockBonus;
       score += entry.freeSpace * 0.95;
       score += entry.exitScore;
       if (entry.preferred) score += 18 + entry.aggro * 8;
       score -= entry.loopPenalty;
+      score -= entry.mirrorPenalty;
       score -= entry.ownTrap ? 260 : 0;
       score += entry.noise * 0.35;
       score += entry.randomJitter;
@@ -1143,19 +1546,19 @@ function aiTurn(bot, dt) {
         best = entry.opt;
       }
     }
-    bot.dirIndex = best;
+    tryBotTurn(bot, best, { horizon: 14 });
   }
 
   // Avoid brain-dead straight runs into the outer wall unless it's a deliberate cutoff case above.
   if (!shouldWallSacrifice(bot, target) && willHitOwnTrailSoon(bot, bot.dirIndex, 12)) {
-    bot.dirIndex = safestTurn(bot);
+    tryBotTurn(bot, safestTurn(bot), { force: true, horizon: 16 });
   }
 }
 
 function collidesAtPosition(entity, x, z) {
   if (Math.abs(x) >= CONFIG.fieldHalf || Math.abs(z) >= CONFIG.fieldHalf) return true;
   if (trailSegmentHit(x, z, { ignoreEntityId: entity.id, inflate: -0.05 })) return true;
-  if (trailSegmentHit(x, z, { onlyEntityId: entity.id, ownRecentGrace: 0.22, inflate: -0.05 })) return true;
+  if (trailSegmentHit(x, z, { onlyEntityId: entity.id, ownRecentGrace: 0.38, inflate: -0.05 })) return true;
   return false;
 }
 
@@ -1275,63 +1678,24 @@ function activateOverload() {
   // Power-ups are disabled.
 }
 
-function respawnBot(bot) {
-  bot.alive = true;
-  bot.mesh.visible = true;
-  bot.x = bot.spawnX;
-  bot.z = bot.spawnZ;
-  bot.dirIndex = bot.spawnDirIndex;
-  bot.trailSamples = [{ ownerId: bot.id, owner: 'bot', x: bot.x, z: bot.z, bornAt: state.survived }];
-  bot.trailPendingDist = 0;
-  bot.trailDirty = true;
-  bot.deadTimer = 0;
-  bot.awaitingTrailClear = false;
-  bot.kamikazeUntil = 0;
-  bot.pathMemory = [];
-  bot.mesh.position.set(bot.x, 0.1, bot.z);
-  bot.mesh.rotation.y = bot.dirIndex * (Math.PI / 2);
-}
-
 function replaceDeadBot(bot) {
   gfx.scene.remove(bot.mesh);
   gfx.scene.remove(bot.trailMesh);
   bot.trailGeometry?.dispose?.();
   bot.trailMaterial?.dispose?.();
   state.entities = state.entities.filter((e) => e.id !== bot.id);
-
-  const spawnMargin = 14;
-  const range = CONFIG.fieldHalf - spawnMargin;
-  const x = randomIn(-range, range);
-  const z = randomIn(-range, range);
-  const dirIndex = centerBiasDir(x, z);
-
-  const usedBotColors = new Set(
-    state.entities.filter((e) => !e.isPlayer).map((e) => e.color.toLowerCase())
-  );
-  const botColor = pickUniqueBotColor(state.selectedTrail.color, usedBotColors);
-  emitRespawnEffectAt(x, z, botColor);
-  state.entities.push(createEntity(false, botColor, x, z, dirIndex));
 }
 
 function updateEntities(dt) {
 
   const worldSpeed = (CONFIG.baseSpeed + state.survived * CONFIG.speedRamp) * state.speedMul;
-  const replaceQueue = [];
 
   for (let i = 0; i < state.entities.length; i += 1) {
     const e = state.entities[i];
-    if (!e.alive) {
-      if (!e.isPlayer) {
-        pruneAgedTrailSamples(e);
-        if (e.awaitingTrailClear && e.trailSamples.length === 0) {
-          replaceQueue.push(e.id);
-        }
-      }
-      continue;
-    }
+    if (!e.alive) continue;
     if (!e.isPlayer) aiTurn(e, dt);
 
-    const speed = e.isPlayer ? worldSpeed : worldSpeed * randomIn(0.9, 1.03);
+    const speed = worldSpeed * (e.isPlayer ? 1 : (e.speedFactor || CONFIG.botSpeedMultiplier));
 
     const d = entityDir(e);
     const prevX = e.x;
@@ -1347,6 +1711,7 @@ function updateEntities(dt) {
         playCrashSound();
       } else {
         e.awaitingTrailClear = true;
+        spawnAdditionalBot(true);
       }
       continue;
     }
@@ -1363,17 +1728,18 @@ function updateEntities(dt) {
     }
   }
 
-  for (const id of replaceQueue) {
-    const deadBot = state.entities.find((e) => e.id === id && !e.isPlayer);
-    if (deadBot) replaceDeadBot(deadBot);
-  }
-
   state.trails.length = 0;
   for (const e of state.entities) {
     pruneAgedTrailSamples(e);
     syncEntityTrailColor(e);
     for (const sample of e.trailSamples) state.trails.push(sample);
     if (e.trailDirty) rebuildTrailMesh(e);
+  }
+
+  for (const e of state.entities.slice()) {
+    if (!e.isPlayer && !e.alive && e.awaitingTrailClear && e.trailSamples.length === 0) {
+      replaceDeadBot(e);
+    }
   }
 }
 
@@ -1455,6 +1821,7 @@ function updateGame(dt) {
   }
   state.pixelTimer = Math.max(0, state.pixelTimer - dt);
   if (state.pixelTimer <= 0) canvas.classList.remove('power-effect');
+  updateWallTrapPlan(dt, p);
 
   state.nextBotJoinMs -= dt * 1000;
   if (state.nextBotJoinMs <= 0) {
@@ -1465,7 +1832,8 @@ function updateGame(dt) {
   state.nextBotRefillMs -= dt * 1000;
   if (state.nextBotRefillMs <= 0) {
     const aliveBots = state.entities.filter((e) => !e.isPlayer && e.alive).length;
-    if (aliveBots < CONFIG.minAliveBots) {
+    const targetBots = desiredAliveBots();
+    if (aliveBots < targetBots) {
       spawnAdditionalBot(true);
     }
     state.nextBotRefillMs = CONFIG.botRefillIntervalMs;
@@ -1497,10 +1865,25 @@ function updateUi() {
 
   ui.playerName.textContent = state.playerName;
   ui.bestScore.textContent = Math.floor(state.bestScore).toString();
-  ui.score.textContent = Math.floor(state.score).toString();
+  const scoreInt = Math.floor(state.score);
+  ui.score.textContent = scoreInt.toString();
   ui.time.textContent = `${state.survived.toFixed(1)}s`;
   ui.speed.textContent = `${state.speedMul.toFixed(2)}x`;
   ui.multiplier.textContent = `${state.closeCallMultiplier.toFixed(2)}x`;
+
+  if (ui.mobileScore) {
+    const lastMobileScoreInt = state.lastMobileScoreInt || 0;
+    ui.mobileScore.textContent = scoreInt.toString();
+    if (scoreInt > lastMobileScoreInt) {
+      ui.mobileScore.classList.remove('pop');
+      void ui.mobileScore.offsetWidth;
+      ui.mobileScore.classList.add('pop');
+    }
+    state.lastMobileScoreInt = scoreInt;
+  }
+  if (ui.mobileTime) {
+    ui.mobileTime.textContent = `${state.survived.toFixed(1)}s`;
+  }
 
   state.unlockedTrailScore = Math.max(state.unlockedTrailScore, state.score);
   renderTrailOptions();
@@ -1594,6 +1977,22 @@ function render() {
         wall.material.needsUpdate = true;
       }
       gfx.skylineFlickerMs = 120 + Math.random() * 340;
+    }
+  }
+
+  if (gfx.skylineLightBeams.length) {
+    for (const beam of gfx.skylineLightBeams) {
+      const wave = Math.sin(state.survived * beam.userData.speed + beam.userData.phase);
+      const bob = Math.cos(state.survived * beam.userData.speed * 0.8 + beam.userData.phase);
+      if (beam.userData.axis === 'x') {
+        beam.position.x = beam.userData.base + wave * beam.userData.drift;
+      } else {
+        beam.position.z = beam.userData.base + wave * beam.userData.drift;
+      }
+      beam.position.y = 23 + bob * 7;
+      beam.rotation.z = wave * 0.22 + beam.userData.spin;
+      beam.material.color.setHSL((state.survived * 0.08 + beam.userData.hueShift) % 1, 0.95, 0.58);
+      beam.material.opacity = 0.06 + Math.abs(wave) * 0.12;
     }
   }
 
@@ -1780,7 +2179,7 @@ function initAiWorker() {
       state.aiPending.delete(data.requestId);
       const bot = state.entities.find((entity) => entity.id === pending.botId && !entity.isPlayer && entity.alive);
       if (!bot || typeof data.best !== 'number') return;
-      bot.dirIndex = data.best;
+      tryBotTurn(bot, data.best, { horizon: 14 });
     });
   } catch (_error) {
     state.aiWorker = null;
