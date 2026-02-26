@@ -2043,7 +2043,7 @@ function endGame() {
   ui.overlayTitle.textContent = 'Run Ended';
   ui.overlayText.textContent = `${state.playerName} survived ${state.survived.toFixed(1)}s | Score ${Math.floor(state.score)} | Best ${Math.floor(state.bestScore)}. Press Space or Try Again.`;
   ui.startBtn.textContent = 'Try Again';
-  ui.inGameMenu?.classList.remove('hidden');
+  ui.inGameMenu?.classList.add('hidden');
 }
 
 function playCrashSound() {
