@@ -405,6 +405,7 @@ function createEntity(isPlayer, color, x, z, dirIndex) {
     spawnDirIndex: dirIndex,
     deadTimer: 0,
     awaitingTrailClear: false,
+    kamikazeUntil: 0,
   };
   entity.trailSamples.push({ ownerId: entity.id, owner: isPlayer ? 'player' : 'bot', x, z, bornAt: state.survived });
   syncEntityTrailColor(entity);
@@ -863,21 +864,116 @@ function safestTurn(bot) {
   return best;
 }
 
+function wallPressureCutoffTurn(bot, target) {
+  const pd = entityDir(target);
+  const relX = bot.x - target.x;
+  const relZ = bot.z - target.z;
+  const aheadDist = relX * pd.x + relZ * pd.z;
+  const lateral = relX * pd.z - relZ * pd.x;
+
+  // Only force a cutoff when both are advancing toward a nearby outer wall.
+  const sameHeading = DIR[bot.dirIndex].x * pd.x + DIR[bot.dirIndex].z * pd.z > 0.85;
+  const playerWallDist = CONFIG.fieldHalf - Math.max(Math.abs(target.x), Math.abs(target.z));
+  if (!sameHeading || aheadDist < 6 || aheadDist > 56 || playerWallDist > 34 || Math.abs(lateral) > 24) return null;
+
+  if (Math.abs(pd.x) > 0) return lateral >= 0 ? 2 : 0;
+  return lateral >= 0 ? 3 : 1;
+}
+
+function aheadCutoffTurn(bot, target) {
+  const pd = entityDir(target);
+  const relX = bot.x - target.x;
+  const relZ = bot.z - target.z;
+  const aheadDist = relX * pd.x + relZ * pd.z;
+  const lateral = relX * pd.z - relZ * pd.x;
+  const sameHeading = DIR[bot.dirIndex].x * pd.x + DIR[bot.dirIndex].z * pd.z > 0.78;
+
+  if (!sameHeading || aheadDist < 7 || aheadDist > 64 || Math.abs(lateral) > 22) return null;
+  if (Math.abs(pd.x) > 0) return lateral >= 0 ? 2 : 0;
+  return lateral >= 0 ? 3 : 1;
+}
+
+function shouldWallSacrifice(bot, target) {
+  const pd = entityDir(target);
+  const bd = entityDir(bot);
+  const sameHeading = bd.x * pd.x + bd.z * pd.z > 0.82;
+  if (!sameHeading) return false;
+
+  const relX = bot.x - target.x;
+  const relZ = bot.z - target.z;
+  const aheadDist = relX * pd.x + relZ * pd.z;
+  if (aheadDist < 10 || aheadDist > 80) return false;
+
+  const playerWallDist = CONFIG.fieldHalf - Math.max(Math.abs(target.x), Math.abs(target.z));
+  return playerWallDist < 26;
+}
+
+function wallCrashDirFromPosition(bot, target) {
+  const dxNeg = bot.x + CONFIG.fieldHalf;
+  const dxPos = CONFIG.fieldHalf - bot.x;
+  const dzNeg = bot.z + CONFIG.fieldHalf;
+  const dzPos = CONFIG.fieldHalf - bot.z;
+
+  const options = [
+    { dir: 3, dist: dxNeg },
+    { dir: 1, dist: dxPos },
+    { dir: 0, dist: dzNeg },
+    { dir: 2, dist: dzPos },
+  ].sort((a, b) => a.dist - b.dist);
+
+  const pd = entityDir(target);
+  for (const opt of options) {
+    const d = DIR[opt.dir];
+    if (d.x * pd.x + d.z * pd.z > -0.25) return opt.dir;
+  }
+  return options[0].dir;
+}
+
+function shouldForceWallKamikaze(bot, target) {
+  if (!target?.alive || bot.isPlayer) return false;
+  const playerWallDist = CONFIG.fieldHalf - Math.max(Math.abs(target.x), Math.abs(target.z));
+  if (playerWallDist > 20) return false;
+
+  const nearest = state.entities
+    .filter((e) => !e.isPlayer && e.alive)
+    .slice()
+    .sort((a, b) => distSq2D(a, target) - distSq2D(b, target))[0];
+
+  return nearest?.id === bot.id;
+}
+
 function aiTurn(bot, dt) {
   bot.thinkTimer -= dt;
   if (bot.thinkTimer > 0) return;
-  bot.thinkTimer = randomIn(0.04, 0.13);
-
-  const forcedCut = playerCutoffTurn(bot);
-  if (forcedCut !== null && !willHitOwnTrailSoon(bot, forcedCut, 9)) {
-    bot.dirIndex = forcedCut;
-    return;
-  }
+  bot.thinkTimer = randomIn(0.04, 0.12);
 
   const options = [bot.dirIndex, (bot.dirIndex + 3) % 4, (bot.dirIndex + 1) % 4];
   const target = selectBotTarget(bot);
+  if (!target?.alive) return;
+
+  if (shouldForceWallKamikaze(bot, target)) {
+    bot.kamikazeUntil = Math.max(bot.kamikazeUntil || 0, state.survived + 1.1);
+  }
+
+  if ((bot.kamikazeUntil || 0) > state.survived) {
+    bot.dirIndex = wallCrashDirFromPosition(bot, target);
+    return;
+  }
+
   const targetDir = entityDir(target);
   const preferred = optionTowardTarget(bot, target);
+
+  const cutoffTurn = wallPressureCutoffTurn(bot, target);
+  if (cutoffTurn !== null && !willHitOwnTrailSoon(bot, cutoffTurn, 9)) {
+    bot.dirIndex = cutoffTurn;
+    return;
+  }
+
+  const forwardCutoff = aheadCutoffTurn(bot, target);
+  if (forwardCutoff !== null) {
+    bot.dirIndex = forwardCutoff;
+    return;
+  }
 
   let best = options[0];
   let bestScore = -Infinity;
@@ -885,7 +981,6 @@ function aiTurn(bot, dt) {
   for (const opt of options) {
     const d = DIR[opt];
     const probe = { x: bot.x + d.x * 10, z: bot.z + d.z * 10 };
-
     const ownTrap = willHitOwnTrailSoon(bot, opt, 22) ? 1 : 0;
 
     let score = 0;
@@ -910,8 +1005,8 @@ function aiTurn(bot, dt) {
 
   bot.dirIndex = best;
 
-  // Emergency correction right after choosing: never keep a heading that immediately self-traps.
-  if (willHitOwnTrailSoon(bot, bot.dirIndex, 14)) {
+  // Avoid brain-dead straight runs into the outer wall unless it's a deliberate cutoff case above.
+  if (!shouldWallSacrifice(bot, target) && willHitOwnTrailSoon(bot, bot.dirIndex, 12)) {
     bot.dirIndex = safestTurn(bot);
   }
 }
@@ -965,9 +1060,9 @@ function getBitTexture(char, color) {
   return texture;
 }
 
-function emitRespawnEffect(bot) {
+function emitRespawnEffectAt(x, z, color) {
   for (let i = 0; i < 34; i += 1) {
-    const texture = getBitTexture(Math.random() < 0.5 ? '0' : '1', bot.color);
+    const texture = getBitTexture(Math.random() < 0.5 ? '0' : '1', color);
     if (!texture) continue;
 
     const mesh = new THREE.Sprite(new THREE.SpriteMaterial({
@@ -979,9 +1074,9 @@ function emitRespawnEffect(bot) {
     }));
 
     mesh.position.set(
-      bot.spawnX + randomIn(-2.6, 2.6),
+      x + randomIn(-2.6, 2.6),
       randomIn(3.8, 8.5),
-      bot.spawnZ + randomIn(-2.6, 2.6),
+      z + randomIn(-2.6, 2.6),
     );
     const scale = randomIn(0.34, 0.72);
     mesh.scale.set(scale, scale, 1);
@@ -1042,14 +1137,37 @@ function respawnBot(bot) {
   bot.trailDirty = true;
   bot.deadTimer = 0;
   bot.awaitingTrailClear = false;
+  bot.kamikazeUntil = 0;
   bot.pathMemory = [];
   bot.mesh.position.set(bot.x, 0.1, bot.z);
   bot.mesh.rotation.y = bot.dirIndex * (Math.PI / 2);
 }
 
+function replaceDeadBot(bot) {
+  gfx.scene.remove(bot.mesh);
+  gfx.scene.remove(bot.trailMesh);
+  bot.trailGeometry?.dispose?.();
+  bot.trailMaterial?.dispose?.();
+  state.entities = state.entities.filter((e) => e.id !== bot.id);
+
+  const spawnMargin = 14;
+  const range = CONFIG.fieldHalf - spawnMargin;
+  const x = randomIn(-range, range);
+  const z = randomIn(-range, range);
+  const dirIndex = centerBiasDir(x, z);
+
+  const usedBotColors = new Set(
+    state.entities.filter((e) => !e.isPlayer).map((e) => e.color.toLowerCase())
+  );
+  const botColor = pickUniqueBotColor(state.selectedTrail.color, usedBotColors);
+  emitRespawnEffectAt(x, z, botColor);
+  state.entities.push(createEntity(false, botColor, x, z, dirIndex));
+}
+
 function updateEntities(dt) {
 
   const worldSpeed = (CONFIG.baseSpeed + state.survived * CONFIG.speedRamp) * state.speedMul;
+  const replaceQueue = [];
 
   for (let i = 0; i < state.entities.length; i += 1) {
     const e = state.entities[i];
@@ -1057,8 +1175,7 @@ function updateEntities(dt) {
       if (!e.isPlayer) {
         pruneAgedTrailSamples(e);
         if (e.awaitingTrailClear && e.trailSamples.length === 0) {
-          emitRespawnEffect(e);
-          respawnBot(e);
+          replaceQueue.push(e.id);
         }
       }
       continue;
@@ -1066,10 +1183,6 @@ function updateEntities(dt) {
     if (!e.isPlayer) aiTurn(e, dt);
 
     const speed = e.isPlayer ? worldSpeed : worldSpeed * randomIn(0.9, 1.03);
-
-    if (!e.isPlayer && willHitOwnTrailSoon(e, e.dirIndex, 10)) {
-      e.dirIndex = safestTurn(e);
-    }
 
     const d = entityDir(e);
     const prevX = e.x;
@@ -1099,6 +1212,11 @@ function updateEntities(dt) {
       e.pathMemory.push(memoryKey);
       if (e.pathMemory.length > 40) e.pathMemory.shift();
     }
+  }
+
+  for (const id of replaceQueue) {
+    const deadBot = state.entities.find((e) => e.id === id && !e.isPlayer);
+    if (deadBot) replaceDeadBot(deadBot);
   }
 
   state.trails.length = 0;
