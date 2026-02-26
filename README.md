@@ -12,7 +12,7 @@ A Tron-inspired survival game rendered with Three.js + WebGL.
 - Trail customization unlocks with neon colors and particle styles.
 - Dynamic synthwave-style generated audio that intensifies with speed.
 - Texture atlas-driven particle effects and reduced trail-only neon glow to reduce texture churn.
-- Digital skyline backdrop with outline/data-window flicker for a more immersive arena.
+- Tall digital-skyline outer wall with glowing outlines/data-window flicker for a more immersive arena.
 - Web Worker-assisted bot scoring to move AI scoring calculations off the main UI thread.
 
 ## Run

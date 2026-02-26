@@ -312,24 +312,31 @@ function initSkylineBackdrop() {
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.ClampToEdgeWrapping;
-    tex.repeat.set(2, 1);
+    tex.repeat.set(2.25, 1);
   });
   gfx.skylineTextures = [texA, texB];
 
-  const mat = new THREE.MeshBasicMaterial({
+  const skylineMat = new THREE.MeshBasicMaterial({
     map: texA,
     transparent: true,
-    opacity: 0.52,
+    opacity: 0.62,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide,
+    side: THREE.BackSide,
   });
-  const geo = new THREE.CylinderGeometry(CONFIG.fieldHalf + 20, CONFIG.fieldHalf + 20, 36, 48, 1, true);
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.y = 8.5;
-  mesh.rotation.y = Math.PI * 0.25;
-  gfx.scene.add(mesh);
-  gfx.skylinePlane = mesh;
+  const skylineGeo = new THREE.CylinderGeometry(CONFIG.fieldHalf + 5.5, CONFIG.fieldHalf + 5.5, 72, 64, 1, true);
+  const skyline = new THREE.Mesh(skylineGeo, skylineMat);
+  skyline.position.y = 24;
+  skyline.rotation.y = Math.PI * 0.22;
+  gfx.scene.add(skyline);
+  gfx.skylinePlane = skyline;
+
+  const rimGeo = new THREE.TorusGeometry(CONFIG.fieldHalf + 4.8, 0.35, 12, 120);
+  const rimMat = new THREE.MeshBasicMaterial({ color: 0x2af3ff, transparent: true, opacity: 0.38 });
+  const rim = new THREE.Mesh(rimGeo, rimMat);
+  rim.position.y = 2.1;
+  rim.rotation.x = Math.PI / 2;
+  gfx.scene.add(rim);
 }
 
 function setupThree() {
@@ -374,15 +381,6 @@ function setupThree() {
   grid.updateMatrix();
   gfx.scene.add(grid);
 
-  const wallMat = neonMaterial('#20abcf', 0.64);
-  const longWall = new THREE.BoxGeometry(CONFIG.fieldHalf * 2 + 8, 3.4, 1);
-  const sideWall = new THREE.BoxGeometry(1, 3.4, CONFIG.fieldHalf * 2 + 8);
-  const top = new THREE.Mesh(longWall, wallMat); top.position.set(0, 1, -CONFIG.fieldHalf);
-  const bottom = top.clone(); bottom.position.z = CONFIG.fieldHalf;
-  const left = new THREE.Mesh(sideWall, wallMat); left.position.set(-CONFIG.fieldHalf, 1, 0);
-  const right = left.clone(); right.position.x = CONFIG.fieldHalf;
-  [top, bottom, left, right].forEach((wall) => { wall.matrixAutoUpdate = false; wall.updateMatrix(); });
-  gfx.scene.add(top, bottom, left, right);
 
   gfx.trailGeo = new THREE.BoxGeometry(1, 0.75, 1);
   gfx.sparkGeo = new THREE.SphereGeometry(0.14, 6, 6);
@@ -1556,12 +1554,13 @@ function render() {
 
   if (gfx.skylinePlane && gfx.skylineTextures.length === 2) {
     gfx.skylineFlickerMs -= 16;
+    gfx.skylinePlane.material.map.offset.x = (state.survived * 0.004) % 1;
     if (gfx.skylineFlickerMs <= 0) {
-      const flickerOn = Math.random() > 0.45;
+      const flickerOn = Math.random() > 0.48;
       gfx.skylinePlane.material.map = flickerOn ? gfx.skylineTextures[0] : gfx.skylineTextures[1];
-      gfx.skylinePlane.material.opacity = flickerOn ? 0.5 : 0.42;
+      gfx.skylinePlane.material.opacity = flickerOn ? 0.64 : 0.5;
       gfx.skylinePlane.material.needsUpdate = true;
-      gfx.skylineFlickerMs = 120 + Math.random() * 380;
+      gfx.skylineFlickerMs = 110 + Math.random() * 320;
     }
   }
 
