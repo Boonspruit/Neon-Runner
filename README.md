@@ -5,12 +5,8 @@ A Tron-inspired survival game rendered with Three.js + WebGL.
 ## Features
 - Arrow keys/WASD for desktop and swipe controls for mobile.
 - AI bot riders that attempt to trap the player with light walls.
-- Close-call multiplier + speed boosts for near misses.
-- Power-ups:
-  - **Phase Shift:** pass through one wall.
-  - **System Overload:** temporary slow-motion for tighter corridors.
+- Close-call multiplier
 - Trail customization unlocks with neon colors and particle styles.
-- Dynamic synthwave-style generated audio that intensifies with speed.
 - Texture atlas-driven particle effects and reduced trail-only neon glow to reduce texture churn.
 - Tall digital-skyline outer wall with glowing outlines/data-window flicker for a more immersive arena.
 - Web Worker-assisted bot scoring to move AI scoring calculations off the main UI thread.
