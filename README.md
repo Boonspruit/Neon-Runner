@@ -17,7 +17,3 @@ Serve the folder with any static server (required for Service Worker + CDN loadi
 - The app registers `sw.js` and pre-caches the game shell and Three.js dependencies before the gameplay script starts.
 - On first visit, the Service Worker is installed/activated and then used to warm caches; subsequent launches start faster and are resilient to transient network issues.
 
-## Custom Music
-- For copyright-safe background music, place your own licensed loop at `assets/synthwave-loop.mp3`.
-- The game will auto-play that file when available, and fall back to built-in procedural synth if the file is missing.
-- You can replace it with any `.mp3` you own rights to (same filename), then refresh.
