@@ -15,36 +15,49 @@
 body {
   margin: 0;
   min-height: 100vh;
-  font-family: "Segoe UI", system-ui, sans-serif;
-  background:
-    radial-gradient(circle at 20% 20%, rgba(136, 86, 255, 0.22), transparent 40%),
-    radial-gradient(circle at 80% 10%, rgba(23, 242, 255, 0.16), transparent 35%),
-    var(--bg);
+  font-family: "Rajdhani", system-ui, sans-serif;
+  background-color: var(--bg);
+  background-image: 
+    linear-gradient(rgba(23, 242, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(23, 242, 255, 0.05) 1px, transparent 1px);
+  background-size: 40px 40px;
+  background-position: center bottom;
+  animation: gridPan 15s linear infinite;
   color: var(--text);
+}
+
+@keyframes gridPan {
+  0% { background-position: 0 0; }
+  100% { background-position: 0 40px; }
 }
 
 .app {
   max-width: 1100px;
   margin: 0 auto;
-  padding: 1rem;
+  padding: clamp(0.4rem, 2vmin, 1rem);
   display: grid;
-  gap: 0.8rem;
+  gap: clamp(0.4rem, 1.5vmin, 0.8rem);
 }
 
 .hud,
 .controls-help {
-  background: var(--panel);
-  border: 1px solid rgba(136, 86, 255, 0.45);
-  border-radius: 12px;
+  background: rgba(6, 8, 16, 0.65);
+  border: 1px solid rgba(23, 242, 255, 0.3);
+  border-radius: 4px;
   padding: 0.8rem 1rem;
-  backdrop-filter: blur(4px);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.5), inset 0 0 15px rgba(23, 242, 255, 0.05);
 }
 
 h1 {
-  margin: 0 0 0.4rem;
-  font-size: 1.5rem;
-  color: var(--neon-cyan);
-  text-shadow: 0 0 8px rgba(23, 242, 255, 0.5);
+  margin: 0 0 clamp(0.2rem, 1vmin, 0.4rem);
+  font-size: clamp(1.2rem, 4vmin, 1.8rem);
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--text);
+  text-shadow: 0 0 10px rgba(23, 242, 255, 0.8), 0 0 20px rgba(23, 242, 255, 0.4);
 }
 
 .stats,
@@ -56,28 +69,75 @@ h1 {
   align-items: center;
 }
 
+.stats span {
+  display: inline-flex;
+  gap: clamp(0.15rem, 0.5vmin, 0.3rem);
+  font-size: clamp(0.85rem, 2.2vmin, 1.1rem);
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.stats .label {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.stats .val {
+  color: var(--neon-cyan);
+  text-shadow: 0 0 8px rgba(23, 242, 255, 0.6);
+  font-weight: 600;
+}
+
 button {
-  background: linear-gradient(135deg, rgba(23, 242, 255, 0.2), rgba(136, 86, 255, 0.3));
-  border: 1px solid rgba(23, 242, 255, 0.6);
-  color: var(--text);
-  border-radius: 999px;
-  padding: 0.35rem 0.8rem;
+  background: rgba(6, 10, 24, 0.8);
+  border: 1px solid rgba(23, 242, 255, 0.5);
+  color: var(--neon-cyan);
+  font-family: inherit;
+  font-size: clamp(0.85rem, 2.5vmin, 1.1rem);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: clamp(0.35rem, 1vmin, 0.5rem) clamp(0.8rem, 2.5vmin, 1.4rem);
   cursor: pointer;
+  
+  /* Sci-Fi Chamfered Edges */
+  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+  position: relative;
+  transition: all 0.2s ease;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+}
+
+button:hover:not(:disabled) {
+  background: rgba(23, 242, 255, 0.15);
+  border-color: var(--neon-cyan);
+  color: #fff;
+  text-shadow: 0 0 8px rgba(23, 242, 255, 0.8);
+  transform: translateY(-1px);
 }
 
 button.secondary {
-  background: linear-gradient(135deg, rgba(255, 44, 198, 0.16), rgba(136, 86, 255, 0.24));
-  border-color: rgba(255, 44, 198, 0.55);
+  color: var(--neon-pink);
+  border-color: rgba(255, 44, 198, 0.5);
+}
+
+button.secondary:hover:not(:disabled) {
+  background: rgba(255, 44, 198, 0.15);
+  border-color: var(--neon-pink);
+  text-shadow: 0 0 8px rgba(255, 44, 198, 0.8);
 }
 
 button:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
   cursor: not-allowed;
+  filter: grayscale(1);
 }
 
 button.active {
+  background: rgba(255, 44, 198, 0.2);
   border-color: var(--neon-pink);
-  box-shadow: 0 0 12px rgba(255, 44, 198, 0.55);
+  color: #fff;
+  text-shadow: 0 0 8px rgba(255, 44, 198, 0.8);
+  box-shadow: inset 0 0 12px rgba(255, 44, 198, 0.4);
 }
 
 .arena-wrap {
@@ -100,11 +160,12 @@ canvas {
   top: 0.75rem;
   right: 0.75rem;
   z-index: 5;
-  background: rgba(5, 9, 18, 0.58);
-  border: 1px solid rgba(23, 242, 255, 0.45);
-  border-radius: 10px;
-  padding: 0.45rem 0.55rem;
-  backdrop-filter: blur(4px);
+  background: rgba(2, 4, 10, 0.7);
+  border: 1px solid rgba(23, 242, 255, 0.4);
+  padding: 0.5rem;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
 }
 
 .in-game-menu.hidden {
@@ -147,13 +208,21 @@ canvas {
 .overlay {
   position: absolute;
   inset: 0;
-  display: grid;
-  place-content: center;
-  gap: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+  overflow-y: auto;
+  gap: clamp(0.4rem, 1.5vmin, 1rem);
   text-align: center;
-  padding: 1rem;
-  background: rgba(6, 4, 14, 0.62);
-  border-radius: 12px;
+  padding: clamp(1.5rem, 5vh, 3rem) clamp(0.5rem, 2vmin, 1rem);
+  background: rgba(2, 4, 12, 0.65);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+#overlay-title {
+  display: none;
 }
 
 .start-actions {
@@ -164,28 +233,44 @@ canvas {
 }
 
 .start-panel {
-  margin: 0.2rem auto 0;
-  width: min(520px, 92%);
+  margin: clamp(0.2rem, 1vmin, 0.5rem) auto 0;
+  width: min(560px, 92%);
   text-align: left;
-  background: rgba(7, 10, 24, 0.55);
-  border: 1px solid rgba(23, 242, 255, 0.38);
-  border-radius: 10px;
-  padding: 0.55rem 0.7rem;
-  box-shadow: 0 0 22px rgba(23, 242, 255, 0.14), inset 0 0 18px rgba(136, 86, 255, 0.14);
+  background: rgba(4, 7, 18, 0.75);
+  border: 1px solid rgba(23, 242, 255, 0.3);
+  padding: clamp(0.5rem, 2vmin, 1rem) clamp(0.6rem, 2.5vmin, 1.2rem);
+  clip-path: polygon(15px 0, 100% 0, 100% calc(100% - 15px), calc(100% - 15px) 100%, 0 100%, 0 15px);
+  box-shadow: inset 0 0 30px rgba(0, 0, 0, 0.8), inset 0 0 10px rgba(23, 242, 255, 0.1);
 }
 
 .start-panel h3 {
-  margin: 0 0 0.35rem;
-  font-size: 0.82rem;
-  letter-spacing: 0.04em;
+  margin: 0 0 clamp(0.3rem, 1.5vmin, 0.8rem);
+  font-size: clamp(0.85rem, 2.2vmin, 1.1rem);
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--neon-cyan);
+  color: var(--text);
+  border-bottom: 1px solid rgba(23, 242, 255, 0.2);
+  padding-bottom: clamp(0.2rem, 1vmin, 0.4rem);
+}
+
+.start-panel .customization {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.6rem;
+}
+
+.start-panel .customization button {
+  padding: 0.4rem 0.6rem;
+  font-size: clamp(0.7rem, 2vmin, 0.85rem);
+  clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+  width: 100%;
 }
 
 #leaderboard-list {
   margin: 0;
-  padding-left: 1.15rem;
-  font-size: 0.84rem;
+  padding-left: 1.4rem;
+  font-size: 1.05rem;
+  color: var(--neon-cyan);
 }
 
 #leaderboard-list li {
@@ -242,6 +327,11 @@ canvas {
     display: flex;
   }
 
+  #overlay-title {
+    display: block;
+    margin-top: 1rem;
+    margin-bottom: 0;
+  }
 }
 
 

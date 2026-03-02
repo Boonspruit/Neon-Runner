@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Neon Runner: Tron Survival</title>
+    
+    <!-- Google Fonts: Rajdhani for high-tech digital UI -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -11,12 +17,12 @@
       <section class="hud">
         <h1>Neon Runner</h1>
         <div class="stats">
-          <span>Player: <strong id="player-name">Runner-01</strong></span>
-          <span>Best: <strong id="best-score">0</strong></span>
-          <span>Score: <strong id="score">0</strong></span>
-          <span>Time: <strong id="time">0.0s</strong></span>
-          <span>Speed: <strong id="speed">1.0x</strong></span>
-          <span>Close-Call: <strong id="multiplier">1.0x</strong></span>
+          <span><span class="label">Player:</span> <strong class="val" id="player-name">Runner-01</strong></span>
+          <span><span class="label">Best:</span> <strong class="val" id="best-score">0</strong></span>
+          <span><span class="label">Score:</span> <strong class="val" id="score">0</strong></span>
+          <span><span class="label">Time:</span> <strong class="val" id="time">0.0s</strong></span>
+          <span><span class="label">Speed:</span> <strong class="val" id="speed">1.0x</strong></span>
+          <span><span class="label">Close-Call:</span> <strong class="val" id="multiplier">1.0x</strong></span>
         </div>
         <div class="status-row">
           <button id="fullscreen-btn" type="button">Fullscreen</button>
@@ -30,8 +36,8 @@
           <div class="customization" id="trail-options"></div>
         </div>
         <div class="mobile-corner-stats" id="mobile-corner-stats" aria-live="polite">
-          <span class="mobile-score">Score <strong id="mobile-score">0</strong></span>
-          <span class="mobile-time">Time <strong id="mobile-time">0.0s</strong></span>
+          <span class="mobile-score"><span class="label">Score</span> <strong class="val" id="mobile-score">0</strong></span>
+          <span class="mobile-time"><span class="label">Time</span> <strong class="val" id="mobile-time">0.0s</strong></span>
         </div>
         <div class="overlay" id="overlay">
           <h2 id="overlay-title">Neon Runner</h2>
@@ -59,7 +65,7 @@
       </section>
     </main>
 
-    <audio id="bgm" preload="auto" loop src="assets/synthwave-loop.mp3"></audio>
+    <script src="assets/ai-music-generator.js"></script>
 
     <script>
       (function () {

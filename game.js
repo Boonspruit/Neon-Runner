@@ -300,6 +300,16 @@ function trailSegmentHit(x, z, opts = {}) {
       const b = samples[i];
       if (state.survived - b.bornAt > trailFadeAge(owner)) continue;
       if (ownRecentGrace > 0 && owner.id === onlyEntityId && state.survived - b.bornAt < ownRecentGrace) continue;
+
+      // Efficient AABB Early Exit
+      const minX = Math.min(a.x, b.x) - hitR;
+      const maxX = Math.max(a.x, b.x) + hitR;
+      if (x < minX || x > maxX) continue;
+
+      const minZ = Math.min(a.z, b.z) - hitR;
+      const maxZ = Math.max(a.z, b.z) + hitR;
+      if (z < minZ || z > maxZ) continue;
+
       if (pointSegmentDistSq(x, z, a.x, a.z, b.x, b.z) < hitSq) return true;
     }
   }
@@ -332,7 +342,13 @@ function getRenderableTrailPoints(entity) {
 
 function neonMaterial(color, emissive = 0.9) {
   return new THREE.MeshStandardMaterial({
-    color: hexToInt(color), emissive: hexToInt(color), emissiveIntensity: emissive, roughness: 0.35, metalness: 0.22,
+    color: hexToInt(color), 
+    emissive: hexToInt(color), 
+    emissiveIntensity: emissive, 
+    roughness: 0.1, 
+    metalness: 0.8,
+    transparent: true,
+    opacity: 0.85,
   });
 }
 
@@ -358,85 +374,127 @@ function initEffectsAtlas() {
 
 
 function initSkylineBackdrop() {
-  const loader = new THREE.TextureLoader();
-  const texA = loader.load('assets/digital-skyline-a.svg');
-  const texB = loader.load('assets/digital-skyline-b.svg');
-  [texA, texB].forEach((tex) => {
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.ClampToEdgeWrapping;
-    tex.repeat.set(2.8, 1);
-  });
-  gfx.skylineTextures = [texA, texB];
-  gfx.skylineWalls = [];
   gfx.skylineLightBeams = [];
-
-  const wallHeight = 44;
-  const offset = CONFIG.fieldHalf + 1.0;
-  const frontBackWidth = CONFIG.fieldHalf * 2 - 1.2;
-  const sideWidth = CONFIG.fieldHalf * 2 - 1.2;
-
-  const configs = [
-    { x: 0, z: -offset, rotY: 0, width: frontBackWidth, axis: 'x', far: -1 },
-    { x: 0, z: offset, rotY: Math.PI, width: frontBackWidth, axis: 'x', far: 1 },
-    { x: -offset, z: 0, rotY: Math.PI / 2, width: sideWidth, axis: 'z', far: -1 },
-    { x: offset, z: 0, rotY: -Math.PI / 2, width: sideWidth, axis: 'z', far: 1 },
-  ];
-
-  for (const cfg of configs) {
-    const planeGeo = new THREE.PlaneGeometry(cfg.width, wallHeight);
-    const map = texA.clone();
-    map.colorSpace = THREE.SRGBColorSpace;
-    map.wrapS = THREE.RepeatWrapping;
-    map.wrapT = THREE.ClampToEdgeWrapping;
-    map.repeat.set(2.8, 1);
-
-    const mat = new THREE.MeshBasicMaterial({
-      map,
-      transparent: true,
-      opacity: 0.62,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      side: THREE.DoubleSide,
-    });
-
-    const wall = new THREE.Mesh(planeGeo, mat);
-    wall.position.set(cfg.x, wallHeight * 0.46, cfg.z);
-    wall.rotation.y = cfg.rotY;
-    wall.userData = { axis: cfg.axis, far: cfg.far, baseWidth: cfg.width };
-    gfx.scene.add(wall);
-    gfx.skylineWalls.push(wall);
-
-    for (let i = 0; i < 5; i += 1) {
-      const beamGeo = new THREE.PlaneGeometry(randomIn(14, 30), randomIn(52, 78));
-      const beamMat = new THREE.MeshBasicMaterial({
-        color: i % 2 === 0 ? 0x21d8ff : 0xff41d6,
-        transparent: true,
-        opacity: 0.08,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        side: THREE.DoubleSide,
-      });
-      const beam = new THREE.Mesh(beamGeo, beamMat);
-      if (cfg.axis === 'x') {
-        beam.position.set(randomIn(-cfg.width * 0.46, cfg.width * 0.46), randomIn(15, 30), cfg.z + cfg.far * 5.5);
-      } else {
-        beam.position.set(cfg.x + cfg.far * 5.5, randomIn(15, 30), randomIn(-cfg.width * 0.46, cfg.width * 0.46));
-      }
-      beam.rotation.y = cfg.rotY;
-      beam.userData = {
-        axis: cfg.axis,
-        base: cfg.axis === 'x' ? beam.position.x : beam.position.z,
-        drift: randomIn(8, 18),
-        speed: randomIn(0.6, 1.45),
-        phase: randomIn(0, Math.PI * 2),
-        hueShift: randomIn(0, 1),
-        spin: randomIn(-0.3, 0.3),
-      };
-      gfx.scene.add(beam);
-      gfx.skylineLightBeams.push(beam);
+  gfx.skylineWalls = []; // Keeping array so old render loops don't crash if they check length
+  
+  const gridSize = 40;
+  const exclusionZone = 140;
+  const maxDist = 650;
+  
+  const positions = [];
+  for (let x = -maxDist; x <= maxDist; x += gridSize) {
+    for (let z = -maxDist; z <= maxDist; z += gridSize) {
+      if (Math.abs(x) < exclusionZone && Math.abs(z) < exclusionZone) continue;
+      if (Math.random() > 0.82) continue; // Leaves organic gaps in the "grid"
+      
+      const ox = x + (Math.random() - 0.5) * 12; // Slight jitter off perfect grid
+      const oz = z + (Math.random() - 0.5) * 12;
+      positions.push({ x: ox, z: oz });
     }
   }
+  
+  const count = positions.length;
+  const geometry = new THREE.BoxGeometry(1, 1, 1);
+  
+  const material = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: { value: 0.0 }
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      varying vec3 vViewPosition;
+      void main() {
+        vUv = uv;
+        vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+        vViewPosition = -mvPosition.xyz;
+        gl_Position = projectionMatrix * mvPosition;
+      }
+    `,
+    fragmentShader: `
+      uniform float uTime;
+      varying vec2 vUv;
+      varying vec3 vViewPosition;
+      
+      float random(vec2 st) {
+        return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
+      }
+      
+      void main() {
+        vec3 baseColor = vec3(0.01, 0.02, 0.05);
+        
+        // Edge highlighting for Tron look
+        float edgeWidth = 0.03;
+        float isEdgeX = step(vUv.x, edgeWidth) + step(1.0 - edgeWidth, vUv.x);
+        float isEdgeY = step(vUv.y, edgeWidth) + step(1.0 - edgeWidth, vUv.y);
+        float isEdge = clamp(isEdgeX + isEdgeY, 0.0, 1.0);
+        vec3 edgeColor = vec3(0.05, 0.6, 1.0);
+        
+        // Windows
+        vec2 grid = floor(vUv * vec2(8.0, 25.0));
+        float windowNoise = random(grid);
+        
+        float flickerSpeed = windowNoise * 8.0 + 2.0;
+        float flicker = sin(uTime * flickerSpeed + windowNoise * 100.0);
+        flicker = step(0.85 + windowNoise * 0.1, flicker);
+        
+        float windowOn = step(0.45, windowNoise);
+        
+        vec3 windowColor = vec3(0.0);
+        if (windowOn > 0.5 && isEdge == 0.0) {
+           vec3 c1 = vec3(0.05, 0.8, 1.0); // Cyan
+           vec3 c2 = vec3(0.1, 0.5, 1.0);  // Deep Blue
+           vec3 c3 = vec3(0.4, 0.9, 1.0);  // Light Cyan
+           
+           vec3 finalWinColor = c1;
+           if (windowNoise > 0.85) finalWinColor = c2;
+           else if (windowNoise > 0.7) finalWinColor = c3;
+           
+           if (flicker > 0.5) {
+               windowColor = finalWinColor * 0.15;
+           } else {
+               windowColor = finalWinColor * 1.6;
+           }
+        }
+        
+        vec3 finalColor = mix(baseColor, edgeColor, isEdge) + windowColor;
+        
+        float depth = length(vViewPosition);
+        float fogFactor = smoothstep(120.0, 480.0, depth);
+        
+        gl_FragColor = vec4(mix(finalColor, vec3(0.05, 0.03, 0.11), fogFactor), 1.0);
+      }
+    `,
+    transparent: true,
+    side: THREE.DoubleSide
+  });
+  
+  gfx.cityMesh = new THREE.InstancedMesh(geometry, material, count);
+  gfx.cityMesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+  
+  const dummy = new THREE.Object3D();
+  for (let i = 0; i < count; i++) {
+    const p = positions[i];
+    const dist = Math.hypot(p.x, p.z);
+    
+    const w = 15 + Math.random() * 20;
+    const d = 15 + Math.random() * 20;
+    
+    // Scale up height by distance (closer buildings are smaller, further form a bowl)
+    const distFactor = Math.max(0, (dist - exclusionZone) / (maxDist - exclusionZone));
+    const h = 40 + distFactor * 250 + Math.random() * 80;
+    
+    const y = h / 2 - 10;
+    
+    dummy.position.set(p.x, y, p.z);
+    dummy.scale.set(w, h, d);
+    
+    // Orthogonal rotations (0, 90, 180, 270 degrees) to simulate structured blocks
+    dummy.rotation.y = Math.floor(Math.random() * 4) * (Math.PI / 2);
+    dummy.updateMatrix();
+    gfx.cityMesh.setMatrixAt(i, dummy.matrix);
+  }
+  
+  gfx.scene.add(gfx.cityMesh);
 }
 
 
@@ -561,7 +619,12 @@ function createEntity(isPlayer, color, x, z, dirIndex, options = {}) {
     mesh,
     trailTick: 0,
     trailSamples: [],
-    trailGeometry: new THREE.BufferGeometry(),
+    trailGeometry: (() => {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(CONFIG.maxTrailLength * 12 * 3), 3).setUsage(THREE.DynamicDrawUsage));
+      geo.setIndex(new THREE.BufferAttribute(new Uint32Array(CONFIG.maxTrailLength * 18), 1).setUsage(THREE.DynamicDrawUsage));
+      return geo;
+    })(),
     trailMaterial: new THREE.MeshBasicMaterial({
       color: hexToInt(color),
       transparent: false,
@@ -613,8 +676,11 @@ function rebuildTrailMesh(entity) {
   const wallHeight = 0.72;
   const topY = baseY + wallHeight;
   const wallWidth = CONFIG.wallHalfWidth;
-  const positions = [];
-  const indices = [];
+  
+  const posArray = entity.trailGeometry.attributes.position.array;
+  const indArray = entity.trailGeometry.index.array;
+  let pIdx = 0;
+  let iIdx = 0;
 
   for (let i = 0; i < points.length; i += 1) {
     const prev = points[Math.max(0, i - 1)];
@@ -630,32 +696,22 @@ function rebuildTrailMesh(entity) {
     const px = points[i].x;
     const pz = points[i].z;
 
-    // One centered thick wall volume (not two separate walls)
-    positions.push(px - nx, baseY, pz - nz); // left bottom
-    positions.push(px + nx, baseY, pz + nz); // right bottom
-    positions.push(px - nx, topY, pz - nz);  // left top
-    positions.push(px + nx, topY, pz + nz);  // right top
+    posArray[pIdx++] = px - nx; posArray[pIdx++] = baseY; posArray[pIdx++] = pz - nz;
+    posArray[pIdx++] = px + nx; posArray[pIdx++] = baseY; posArray[pIdx++] = pz + nz;
+    posArray[pIdx++] = px - nx; posArray[pIdx++] = topY;  posArray[pIdx++] = pz - nz;
+    posArray[pIdx++] = px + nx; posArray[pIdx++] = topY;  posArray[pIdx++] = pz + nz;
 
     if (i < points.length - 1) {
-      const a = i * 4;
-      const b = a + 1;
-      const c = a + 2;
-      const d = a + 3;
-      const e = a + 4;
-      const f = a + 5;
-      const g = a + 6;
-      const h = a + 7;
-
-      // top bridge keeps wall visible head-on
-      indices.push(c, d, g, d, h, g);
-      // side faces
-      indices.push(a, c, e, c, g, e);
-      indices.push(b, f, d, d, f, h);
+      const a = i * 4, b = a + 1, c = a + 2, d = a + 3, e = a + 4, f = a + 5, g = a + 6, h = a + 7;
+      indArray[iIdx++] = c; indArray[iIdx++] = d; indArray[iIdx++] = g; indArray[iIdx++] = d; indArray[iIdx++] = h; indArray[iIdx++] = g;
+      indArray[iIdx++] = a; indArray[iIdx++] = c; indArray[iIdx++] = e; indArray[iIdx++] = c; indArray[iIdx++] = g; indArray[iIdx++] = e;
+      indArray[iIdx++] = b; indArray[iIdx++] = f; indArray[iIdx++] = d; indArray[iIdx++] = d; indArray[iIdx++] = f; indArray[iIdx++] = h;
     }
   }
 
-  entity.trailGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  entity.trailGeometry.setIndex(indices);
+  entity.trailGeometry.setDrawRange(0, iIdx);
+  entity.trailGeometry.attributes.position.needsUpdate = true;
+  entity.trailGeometry.index.needsUpdate = true;
   entity.trailGeometry.computeBoundingSphere();
   entity.trailMesh.visible = true;
   entity.trailDirty = false;
@@ -795,7 +851,8 @@ function rememberBotSpawn(x, z) {
 }
 
 function trailFadeAge(entity = null) {
-  if (!entity || entity.alive) return Infinity;
+  if (!entity) return Infinity;
+  if (entity.alive) return 25;
   return CONFIG.deadTrailFadeAge;
 }
 
@@ -902,8 +959,9 @@ function estimateDanger(x, z, dirIndex, entityId) {
     const nx = x + d.x * step * 2;
     const nz = z + d.z * step * 2;
     if (Math.abs(nx) > arenaHalf() - 2 || Math.abs(nz) > arenaHalf() - 2) penalty += 24;
+    // Fast Bounding Box Reject implicitly handles optimization here
     if (trailSegmentHit(nx, nz, { ignoreEntityId: entityId, inflate: -0.05 })) penalty += 16;
-    if (trailSegmentHit(nx, nz, { onlyEntityId: entityId, ownRecentGrace: 1.3, inflate: -0.05 })) penalty += 28;
+    if (trailSegmentHit(nx, nz, { onlyEntityId: entityId, ownRecentGrace: 0.2, inflate: -0.05 })) penalty += 28;
   }
   return penalty;
 }
@@ -911,7 +969,7 @@ function estimateDanger(x, z, dirIndex, entityId) {
 function pointBlocked(x, z, entityId) {
   if (Math.abs(x) >= arenaHalf() - 1 || Math.abs(z) >= arenaHalf() - 1) return true;
   return trailSegmentHit(x, z, { ignoreEntityId: entityId, inflate: -0.06 })
-    || trailSegmentHit(x, z, { onlyEntityId: entityId, ownRecentGrace: 1.2, inflate: -0.06 });
+    || trailSegmentHit(x, z, { onlyEntityId: entityId, ownRecentGrace: 0.2, inflate: -0.06 });
 }
 
 function projectedFreeSpace(bot, optDir) {
@@ -1252,7 +1310,7 @@ function willHitOwnTrailSoon(bot, dirIndex, horizon = 18) {
     const nz = bot.z + d.z * i * stride;
 
     if (Math.abs(nx) >= arenaHalf() - 1.4 || Math.abs(nz) >= arenaHalf() - 1.4) return true;
-    if (trailSegmentHit(nx, nz, { onlyEntityId: bot.id, ownRecentGrace: 1.1, inflate: -0.05 })) return true;
+    if (trailSegmentHit(nx, nz, { onlyEntityId: bot.id, ownRecentGrace: 0.2, inflate: -0.05 })) return true;
   }
 
   return false;
@@ -2034,23 +2092,8 @@ function render() {
   const pulse = 0.2 + Math.sin(state.survived * 2.5) * 0.06;
   gfx.floor.material.emissiveIntensity = pulse;
 
-  if (gfx.skylineWalls.length && gfx.skylineTextures.length === 2) {
-    gfx.skylineFlickerMs -= 16;
-    const scroll = (state.survived * 0.004) % 1;
-    for (const wall of gfx.skylineWalls) {
-      if (wall.material?.map) wall.material.map.offset.x = scroll;
-    }
-    if (gfx.skylineFlickerMs <= 0) {
-      const flickerOn = Math.random() > 0.5;
-      const texture = flickerOn ? gfx.skylineTextures[0] : gfx.skylineTextures[1];
-      const opacity = flickerOn ? 0.62 : 0.48;
-      for (const wall of gfx.skylineWalls) {
-        wall.material.map = texture;
-        wall.material.opacity = opacity;
-        wall.material.needsUpdate = true;
-      }
-      gfx.skylineFlickerMs = 120 + Math.random() * 340;
-    }
+  if (gfx.cityMesh && gfx.cityMesh.material.uniforms.uTime) {
+    gfx.cityMesh.material.uniforms.uTime.value = state.survived;
   }
 
   if (gfx.skylineLightBeams.length) {
@@ -2149,92 +2192,16 @@ function triggerSynth(freq = 220, duration = 0.08, type = 'triangle') {
   osc.start(); osc.stop(audio.context.currentTime + duration + 0.03);
 }
 
-function midiFreq(midi) { return 440 * (2 ** ((midi - 69) / 12)); }
-
-function scheduleSynthwaveStep() {
-  if (!audio.active || !audio.context) return;
-  const speed = state.speedMul;
-  const now = audio.context.currentTime;
-  const bassPattern = [40, 40, 43, 40, 45, 43, 40, 35, 40, 40, 47, 43, 45, 47, 43, 40];
-  const leadPattern = [64, 67, 71, 67, 62, 67, 71, 74, 64, 67, 71, 67, 62, 67, 69, 71];
-  const bassNote = midiFreq(bassPattern[audio.step % bassPattern.length]);
-  const leadNote = midiFreq(leadPattern[audio.step % leadPattern.length]);
-
-  const kick = audio.context.createOscillator();
-  const kickGain = audio.context.createGain();
-  kick.type = 'sine';
-  kick.frequency.setValueAtTime(125, now);
-  kick.frequency.exponentialRampToValueAtTime(38, now + 0.12);
-  kickGain.gain.setValueAtTime(0.2, now);
-  kickGain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
-  kick.connect(kickGain); kickGain.connect(audio.master); kick.start(now); kick.stop(now + 0.13);
-
-  const bass = audio.context.createOscillator();
-  const bassGain = audio.context.createGain();
-  bass.type = 'sawtooth';
-  bass.frequency.setValueAtTime(bassNote, now);
-  bassGain.gain.setValueAtTime(0.001, now);
-  bassGain.gain.exponentialRampToValueAtTime(0.06 + speed * 0.012, now + 0.02);
-  bassGain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
-  bass.connect(bassGain); bassGain.connect(audio.master); bass.start(now); bass.stop(now + 0.26);
-
-  if (audio.step % 2 === 0) {
-    const lead = audio.context.createOscillator();
-    const leadGain = audio.context.createGain();
-    lead.type = 'triangle';
-    lead.frequency.setValueAtTime(leadNote, now);
-    leadGain.gain.setValueAtTime(0.001, now);
-    leadGain.gain.exponentialRampToValueAtTime(0.05 + speed * 0.01, now + 0.02);
-    leadGain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
-    lead.connect(leadGain); leadGain.connect(audio.master); lead.start(now); lead.stop(now + 0.21);
-  }
-
-  audio.step += 1;
-  const stepMs = Math.max(90, 148 - Math.min(40, speed * 18));
-  audio.stepTimer = setTimeout(scheduleSynthwaveStep, stepMs);
-}
-
-function prepareBgm() {
-  if (!ui.bgm) return;
-  ui.bgm.volume = 0.28;
-  ui.bgm.playbackRate = 1;
-  ui.bgm.addEventListener('canplay', () => {
-    audio.bgmReady = true;
-  }, { once: true });
-  ui.bgm.addEventListener('error', () => {
-    audio.bgmReady = false;
-  });
-}
-
 function initMusic() {
-  if (audio.context) return;
-  const context = new AudioContext();
-  const master = context.createGain();
-  master.gain.value = 0.12;
-  master.connect(context.destination);
-  audio.context = context;
-  audio.master = master;
-  audio.active = true;
-  audio.step = 0;
-
-  if (audio.bgmReady) {
-    ui.bgm.play().then(() => {
-      audio.bgmEnabled = true;
-    }).catch(() => {
-      audio.bgmEnabled = false;
-      scheduleSynthwaveStep();
-    });
-  } else {
-    scheduleSynthwaveStep();
+  if (window.aiSynthwaveMusic) {
+    window.aiSynthwaveMusic.start();
+    audio.active = true;
   }
 }
 
 function syncMusic() {
-  if (!audio.context || !audio.active) return;
-  audio.master.gain.value = Math.min(0.3, 0.1 + state.speedMul * 0.05);
-  if (audio.bgmEnabled && ui.bgm) {
-    ui.bgm.playbackRate = Math.min(1.2, 0.98 + state.speedMul * 0.08);
-    ui.bgm.volume = Math.min(0.45, 0.22 + state.speedMul * 0.08);
+  if (window.aiSynthwaveMusic) {
+    window.aiSynthwaveMusic.setSpeed(state.speedMul);
   }
 }
 
@@ -2273,27 +2240,18 @@ ui.newPlayerBtn?.addEventListener('click', () => {
   ui.overlayText.textContent = `${state.playerName}, press Start Run to enter the grid.`;
 });
 ui.audioBtn.addEventListener('click', async () => {
-  if (!audio.context) initMusic();
-  if (audio.context.state === 'suspended') await audio.context.resume();
-  audio.active = !audio.active;
-  if (audio.active) {
-    if (audio.bgmReady) {
-      ui.bgm.play().then(() => { audio.bgmEnabled = true; }).catch(() => { audio.bgmEnabled = false; });
-    } else {
-      scheduleSynthwaveStep();
-    }
+  if (!audio.active) {
+    initMusic();
     ui.audioBtn.textContent = 'Mute Music';
   } else {
-    if (audio.stepTimer) clearTimeout(audio.stepTimer);
-    if (ui.bgm) ui.bgm.pause();
-    audio.bgmEnabled = false;
+    if (window.aiSynthwaveMusic) window.aiSynthwaveMusic.stop();
+    audio.active = false;
     ui.audioBtn.textContent = 'Start Music';
   }
 });
 
 window.addEventListener('resize', resizeRenderer);
 document.addEventListener('pointerdown', requestFullscreenIfMobile, { once: true });
-prepareBgm();
 initAiWorker();
 
 const profile = loadProfile();
